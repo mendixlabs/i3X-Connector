@@ -996,8 +996,7 @@ export async function createWriteMicroflow(
 
     const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName });
 
-    await microflow.objectCollection.addMicroflowParameterObject({ name: 'InputObject' });
-    const inputParam = microflow.objectCollection.getMicroflowParameterObject('InputObject');
+    const inputParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'InputObject', type: 'Object' });
     if (inputParam) {
         const objType = (await sp.app.model.microflows.createElement('DataTypes$ObjectType')) as DataTypes.ObjectType;
         objType.entity = `${moduleName}.${baseEntityName}`;

@@ -309,7 +309,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
             Array.from(new Set(flattenedObjects.flatMap(obj => Object.keys(obj))))
                 .filter(column => {
                     const lastSegment = column.split('.').pop()?.toLowerCase() ?? '';
-                    return lastSegment !== 'typeid' && lastSegment !== 'namespaceuri';
+                    return lastSegment !== 'typeelementid' && lastSegment !== 'namespaceuri';
                 }),
         [flattenedObjects]
     );

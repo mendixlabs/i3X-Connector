@@ -63,7 +63,7 @@ export function getObjectsUrl(apiBaseUrl: string, typeId: string): string | null
     if (!parsed) {
         return null;
     }
-    parsed.searchParams.set('typeId', typeId);
+    parsed.searchParams.set('typeElementId', typeId);
     return parsed.toString();
 }
 
