@@ -599,7 +599,7 @@ async function ensureMicroflowForObject(
     );
     if (existingMicroflows.length > 0) return false;
 
-    const microflow = await sp.app.model.microflows.addMicroflow(moduleId, { name: microflowName });
+    const microflow = await sp.app.model.microflows.addMicroflow(moduleId, { name: microflowName }, false);
     await populateMicroflowWithRestCall(sp, microflow, {
         url: objectsUrl,
         requestBody: '',
@@ -632,10 +632,11 @@ export async function createQueryValuesMicroflow(
     }
 
     const module = await getRequiredProjectModule(sp, moduleName);
+    const moduleId = module.$ID;
 
     const artifactResult = await createValueQueryArtifacts(
         sp,
-        module.$ID,
+        moduleId,
         moduleName,
         objectType,
         { elementId: selectedElementId, displayName: selectedObject.displayName },
@@ -656,7 +657,7 @@ export async function createQueryValuesMicroflow(
         };
     }
 
-    const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName });
+    const microflow = await sp.app.model.microflows.addMicroflow(moduleId, { name: microflowName }, false);
     await populateMicroflowWithRestCall(sp, microflow, {
         url: objectsValueUrl,
         requestBody: buildValueQueryMicroflowRequestBody(selectedElementId),
@@ -713,7 +714,7 @@ export async function createHistoryMicroflow(
         return { microflowName, microflowCreated: false };
     }
 
-    const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName });
+    const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
 
     await microflow.objectCollection.addMicroflowParameterObject({ name: 'StartTime', type: 'DateTime' });
     const startTimeParam = microflow.objectCollection.getMicroflowParameterObject('StartTime');
@@ -994,7 +995,7 @@ export async function createWriteMicroflow(
         return { microflowName, exportMappingName, microflowCreated: false, exportMappingCreated: exportMappingResult.created };
     }
 
-    const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName });
+    const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
 
     const inputParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'InputObject', type: 'Object' });
     if (inputParam) {

@@ -262,13 +262,18 @@ export async function populateMicroflowWithRestCall(
     exclusiveSplit.relativeMiddlePoint = { x: 600, y: 200 };
     microflow.objectCollection.objects.push(exclusiveSplit);
 
-    if (microflow.flows.length > 0) {
-        microflow.flows.pop();
-    }
+    const startEvent = (await sp.app.model.microflows.createElement(
+        'Microflows$StartEvent'
+    )) as Microflows.StartEvent;
+    startEvent.relativeMiddlePoint = { x: 100, y: 200 };
+    microflow.objectCollection.objects.push(startEvent);
 
-    const startEvent = microflow.objectCollection.objects[0];
-    const endEvent = microflow.objectCollection.objects[1];
+    const endEvent = (await sp.app.model.microflows.createElement(
+        'Microflows$EndEvent'
+    )) as Microflows.EndEvent;
     endEvent.relativeMiddlePoint = { x: 900, y: 200 };
+    microflow.objectCollection.objects.push(endEvent);
+    
     if (exportActivityId) {
         microflow.flows.push(await createSequenceFlow(sp, startEvent.$ID, exportActivityId));
         microflow.flows.push(await createSequenceFlow(sp, exportActivityId, actionActivity.$ID));
