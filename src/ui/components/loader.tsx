@@ -2,13 +2,13 @@ import React, { useState } from 'react';
 import { getStudioProApi } from '@mendix/extensions-api';
 import styles from '../index.module.css';
 import { LoaderProps } from '../types';
-import { getObjectTypesUrl, normalizeI3xBaseUrl } from '../services/i3xUrl';
+import { getObjectTypesUrl } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
 
 const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) => {
     const studioPro = getStudioProApi(context);
     const messageApi = studioPro.ui.messageBoxes;
-    const [url, setUrl] = useState('https://i3x.cesmii.net/i3x/');
+    const [url, setUrl] = useState('https://api.i3x.dev/v1/');
     const [loading, setLoading] = useState(false);
     const [authMode, setAuthMode] = useState<'none' | 'basic' | 'token'>('none');
     const [username, setUsername] = useState('');
@@ -17,8 +17,6 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
     const [tokenHeaderMode, setTokenHeaderMode] = useState<'bearer' | 'custom'>('bearer');
     const [customHeaderName, setCustomHeaderName] = useState('x-api-key');
     const [customPrefix, setCustomPrefix] = useState('');
-
-    const normalizedPreview = normalizeI3xBaseUrl(url);
 
     const resolveAuth = () => {
         if (authMode === 'none') {
@@ -42,11 +40,6 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
     };
 
     const handleLoad = async () => {
-        if (!normalizedPreview) {
-            await messageApi.show('error', `Invalid URL: "${url}". Please enter a valid i3X endpoint.`);
-            return;
-        }
-
         if (authMode === 'basic' && (!username.trim() || !password)) {
             await messageApi.show('error', 'Basic authentication requires both username and password.');
             return;
@@ -64,9 +57,9 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
 
         const auth = resolveAuth();
 
-        const objectTypesUrl = getObjectTypesUrl(normalizedPreview);
+        const objectTypesUrl = getObjectTypesUrl(url);
         if (!objectTypesUrl) {
-            await messageApi.show('error', `Cannot build object types URL from "${url}".`);
+            await messageApi.show('error', `Invalid URL: "${url}". Please enter a valid i3X endpoint.`);
             return;
         }
 
@@ -79,9 +72,8 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
                 return;
             }
             const data = await response.json();
-            setUrl(normalizedPreview);
             setConnection({
-                apiBaseUrl: normalizedPreview,
+                apiBaseUrl: url.trim(),
                 auth,
             });
             setApiData(data);
@@ -104,7 +96,7 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
                     className={styles.loaderInput}
                     type="text"
                     value={url}
-                    placeholder="Enter i3X base URL, e.g. https://i3x.cesmii.net/i3x/"
+                    placeholder="Enter i3X base URL, e.g. https://api.i3x.dev/v1/"
                     onChange={(e) => setUrl(e.target.value)}
                     onKeyDown={handleKeyDown}
                     disabled={loading}
@@ -112,11 +104,6 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
                 <button className={styles.loaderButton} onClick={handleLoad} disabled={loading}>
                     {loading ? 'Loading…' : 'Load'}
                 </button>
-            </div>
-
-            <div className={styles.endpointHint}>
-                <span className={styles.endpointHintLabel}>Normalized base</span>
-                <span className={styles.endpointHintValue}>{normalizedPreview ?? 'Invalid URL'}</span>
             </div>
 
             <div className={styles.authCard}>

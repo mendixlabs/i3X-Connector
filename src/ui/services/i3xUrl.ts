@@ -1,57 +1,18 @@
-const KNOWN_SUFFIX_REGEXES = [
-    /\/objecttypes$/i,
-    /\/objects\/value$/i,
-    /\/objects\/history$/i,
-    /\/objects\/list$/i,
-    /\/objects\/related$/i,
-    /\/objects\/[^/]+\/value$/i,
-    /\/objects$/i,
-];
-
 function trimTrailingSlashes(path: string): string {
     return path.replace(/\/+$/, '');
 }
 
-function stripKnownSuffix(path: string): string {
-    const current = trimTrailingSlashes(path);
-    for (const regex of KNOWN_SUFFIX_REGEXES) {
-        if (regex.test(current)) {
-            return current.replace(regex, '');
-        }
-    }
-    return current;
-}
-
-function toNormalizedPath(path: string): string {
-    const stripped = stripKnownSuffix(path);
-    const withI3x = /\/i3x$/i.test(stripped) ? stripped : `${stripped}/i3x`;
-    return withI3x.replace(/\/{2,}/g, '/') || '/i3x';
-}
-
-export function normalizeI3xBaseUrl(inputUrl: string): string | null {
+function buildFromBase(apiBaseUrl: string, endpointPath: string): URL | null {
     try {
-        const parsed = new URL(inputUrl.trim());
-        parsed.pathname = toNormalizedPath(parsed.pathname);
+        const parsed = new URL(apiBaseUrl.trim());
+        const basePath = trimTrailingSlashes(parsed.pathname);
+        parsed.pathname = `${basePath}${endpointPath}`.replace(/\/{2,}/g, '/');
         parsed.search = '';
         parsed.hash = '';
-        return `${trimTrailingSlashes(parsed.toString())}/`;
+        return parsed;
     } catch {
         return null;
     }
-}
-
-function buildFromBase(apiBaseUrl: string, endpointPath: string): URL | null {
-    const normalizedBase = normalizeI3xBaseUrl(apiBaseUrl);
-    if (!normalizedBase) {
-        return null;
-    }
-
-    const parsed = new URL(normalizedBase);
-    const basePath = trimTrailingSlashes(parsed.pathname);
-    parsed.pathname = `${basePath}${endpointPath}`.replace(/\/{2,}/g, '/');
-    parsed.search = '';
-    parsed.hash = '';
-    return parsed;
 }
 
 export function getObjectTypesUrl(apiBaseUrl: string): string | null {
