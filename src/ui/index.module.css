@@ -544,9 +544,11 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
-.implementButton {
+.actionButton {
     height: 28px;
     padding: 0 12px;
     border: 1px solid var(--primary);
@@ -559,12 +561,12 @@
     transition: background var(--transition), border-color var(--transition), opacity var(--transition);
 }
 
-.implementButton:hover:not(:disabled) {
+.actionButton:hover:not(:disabled) {
     background: var(--primary-hover);
     border-color: var(--primary-hover);
 }
 
-.implementButton:disabled {
+.actionButton:disabled {
     opacity: 0.65;
     cursor: not-allowed;
 }
@@ -653,12 +655,6 @@
     background: var(--primary);
     color: #fff;
     border-color: var(--primary);
-}
-
-.objectActions {
-    margin-top: 12px;
-    display: flex;
-    gap: 8px;
 }
 
 /* Sections */

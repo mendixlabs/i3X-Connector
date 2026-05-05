@@ -10,7 +10,7 @@ import {
     type LeafProperty,
     type ObjectType,
 } from '../types';
-import { getObjectsUrl, getObjectsValueUrl, getObjectsHistoryUrl, getObjectWriteUrl } from './i3xUrl';
+import { getApiBaseUrl, getObjectsUrl, getObjectsValueUrl } from './i3xUrl';
 import { buildI3xRequestHeaders } from './auth';
 import {
     buildValueQueryHttpRequestBody,
@@ -113,9 +113,52 @@ const ENTITY_HDR_H = 30;  // px for entity header
 const H_GAP        = 80;  // horizontal gap between base and group column
 const V_GAP        = 40;  // vertical gap between group entities
 const BASE_WIDTH   = 200; // base entity column width
+const API_BASE_URL_CONSTANT_NAME = 'API_BaseUrl';
+const API_BASE_URL_CONSTANT_REF = `@${IMPLEMENTATION_MODULE}.${API_BASE_URL_CONSTANT_NAME}`;
 
 function entityHeight(attrCount: number): number {
     return ENTITY_HDR_H + Math.max(1, attrCount) * ATTR_ROW_H;
+}
+
+function buildObjectsEndpoint(typeId: string): string {
+    return `/objects?${new URLSearchParams({ typeElementId: typeId }).toString()}`;
+}
+
+function buildRestLocationTemplate(
+    endpointTemplate: string,
+    argExpressions: string[] = []
+): { text: string; args: string[] } {
+    return {
+        text: `{1}${endpointTemplate}`,
+        args: [API_BASE_URL_CONSTANT_REF, ...argExpressions],
+    };
+}
+
+function clampToMendixLong(value: number): number {
+    if (!Number.isFinite(value)) return value;
+    if (value < MENDIX_LONG_MIN) return MENDIX_LONG_MIN;
+    if (value > MENDIX_LONG_MAX) return MENDIX_LONG_MAX;
+    return value;
+}
+
+function sanitizeJsonForMendixLimits(value: unknown, parentKey?: string): unknown {
+    if (Array.isArray(value)) {
+        return value.map(item => sanitizeJsonForMendixLimits(item));
+    }
+
+    if (value !== null && typeof value === 'object') {
+        const sanitized: Record<string, unknown> = {};
+        for (const [key, childValue] of Object.entries(value)) {
+            sanitized[key] = sanitizeJsonForMendixLimits(childValue, key);
+        }
+        return sanitized;
+    }
+
+    if (typeof value === 'number' && (parentKey === 'minimum' || parentKey === 'maximum')) {
+        return clampToMendixLong(value);
+    }
+
+    return value;
 }
 
 function toModelName(raw: string): string {
@@ -148,33 +191,6 @@ function getAttributeType(property: LeafProperty): MendixAttributeType {
     }
 
     return 'String';
-}
-
-function clampToMendixLong(value: number): number {
-    if (!Number.isFinite(value)) return value;
-    if (value < MENDIX_LONG_MIN) return MENDIX_LONG_MIN;
-    if (value > MENDIX_LONG_MAX) return MENDIX_LONG_MAX;
-    return value;
-}
-
-function sanitizeJsonForMendixLimits(value: unknown, parentKey?: string): unknown {
-    if (Array.isArray(value)) {
-        return value.map(item => sanitizeJsonForMendixLimits(item));
-    }
-
-    if (value !== null && typeof value === 'object') {
-        const sanitized: Record<string, unknown> = {};
-        for (const [key, childValue] of Object.entries(value)) {
-            sanitized[key] = sanitizeJsonForMendixLimits(childValue, key);
-        }
-        return sanitized;
-    }
-
-    if (typeof value === 'number' && (parentKey === 'minimum' || parentKey === 'maximum')) {
-        return clampToMendixLong(value);
-    }
-
-    return value;
 }
 
 function getChildPropertiesIfAny(property: AnyProperty): Record<string, AnyProperty> | null {
@@ -298,6 +314,39 @@ async function ensureAuthConstants(auth: AuthConfig): Promise<void> {
         const defaultValue = prefill ? options.defaultValue : '';
         await sp.app.model.constants.addConstant(folder.$ID, { ...options, defaultValue, name });
     }
+}
+
+async function ensureBaseUrlConstant(apiBaseUrl: string): Promise<void> {
+    const normalizedBaseUrl = getApiBaseUrl(apiBaseUrl);
+    if (!normalizedBaseUrl) {
+        throw new Error(`Cannot build base API URL from '${apiBaseUrl}'.`);
+    }
+
+    const sp = getStudioPro();
+    const module = await getRequiredProjectModule();
+    const folder = (await sp.app.model.projects.getFolder(module.$ID, 'Configuration'))
+        ?? await sp.app.model.projects.addFolder(module.$ID, 'Configuration');
+
+    const existingConstants = await sp.app.model.constants.getUnitsInfo();
+    const existingInfo = existingConstants.find(
+        u => u.moduleName === IMPLEMENTATION_MODULE && u.name === API_BASE_URL_CONSTANT_NAME
+    );
+
+    if (existingInfo) {
+        const existingConstant = (await sp.app.model.constants.loadAll(u => u.$ID === existingInfo.$ID, 1))[0] ?? null;
+        if (existingConstant && existingConstant.defaultValue !== normalizedBaseUrl) {
+            existingConstant.defaultValue = normalizedBaseUrl;
+            await sp.app.model.constants.save(existingConstant);
+        }
+        return;
+    }
+
+    await sp.app.model.constants.addConstant(folder.$ID, {
+        name: API_BASE_URL_CONSTANT_NAME,
+        type: 'String',
+        defaultValue: normalizedBaseUrl,
+        exposedToClient: false,
+    });
 }
 
 // ── Domain model helpers ──────────────────────────────────────────────────────
@@ -513,11 +562,11 @@ async function createOrUpdateImportMapping(
 
 async function createValueQueryArtifacts(
     objectType: ObjectType,
-    selectedObject: { elementId: string; displayName: string },
+    selectedObject: { elementId: string },
     connection: ConnectionConfig,
     objectsValueUrl: string
 ): Promise<ValueQueryArtifactsResult> {
-    const baseEntityName = toModelName(`${objectType.displayName}_${selectedObject.displayName}`);
+    const baseEntityName = toModelName(objectType.displayName);
     const requestBody = buildValueQueryHttpRequestBody(selectedObject.elementId.trim());
     const sampleResponse = await fetchJsonSampleResponse(objectsValueUrl, connection, {
         method: 'POST',
@@ -584,7 +633,7 @@ async function buildObjectTypeJsonSnippet(
 
 async function ensureMicroflowForObject(
     microflowName: string,
-    objectsUrl: string,
+    objectsEndpoint: string,
     connection: ConnectionConfig,
     importMappingId: string
 ): Promise<boolean> {
@@ -597,8 +646,10 @@ async function ensureMicroflowForObject(
 
     const module = await getRequiredProjectModule();
     const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
+    const locationTemplate = buildRestLocationTemplate(objectsEndpoint);
     await populateMicroflowWithRestCall(sp, microflow, {
-        url: objectsUrl,
+        url: locationTemplate.text,
+        urlArgs: locationTemplate.args,
         requestBody: '',
         connection,
         importMappingId,
@@ -609,15 +660,15 @@ async function ensureMicroflowForObject(
 
 export async function createQueryValuesMicroflow(
     objectType: ObjectType,
-    selectedObject: { elementId: string; displayName: string },
+    selectedObject: { elementId: string },
     connection: ConnectionConfig
 ): Promise<QueryValuesMicroflowResult> {
     const sp = getStudioPro();
+    await ensureBaseUrlConstant(connection.apiBaseUrl);
     await ensureAuthConstants(connection.auth);
     const objectTypeName = toModelName(objectType.displayName);
-    const objectDisplayName = toModelName(selectedObject.displayName);
     const selectedElementId = selectedObject.elementId.trim();
-    const microflowName = `MF_${objectTypeName}_${objectDisplayName}`;
+    const microflowName = `MF_${objectTypeName}`;
 
     if (!selectedElementId) {
         throw new Error('Selected object has no valid elementId.');
@@ -631,7 +682,7 @@ export async function createQueryValuesMicroflow(
     const module = await getRequiredProjectModule();
     const artifactResult = await createValueQueryArtifacts(
         objectType,
-        { elementId: selectedElementId, displayName: selectedObject.displayName },
+        { elementId: selectedElementId },
         connection,
         objectsValueUrl
     );
@@ -650,9 +701,19 @@ export async function createQueryValuesMicroflow(
     }
 
     const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
+    const elementIdParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ElementId', type: 'String' });
+    if (elementIdParam) {
+        elementIdParam.size = { width: 30, height: 30 };
+        elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
+    }
+
+    const requestBody = buildValueQueryMicroflowRequestBody();
+    const locationTemplate = buildRestLocationTemplate('/objects/value');
     await populateMicroflowWithRestCall(sp, microflow, {
-        url: objectsValueUrl,
-        requestBody: buildValueQueryMicroflowRequestBody(selectedElementId),
+        url: locationTemplate.text,
+        urlArgs: locationTemplate.args,
+        requestBody: requestBody.text,
+        requestBodyArgs: requestBody.args,
         extraHeaders: [
             { key: 'Accept', value: `'application/json'` },
             { key: 'Content-Type', value: `'application/json'` },
@@ -680,26 +741,15 @@ export interface HistoryMicroflowResult {
 
 export async function createHistoryMicroflow(
     objectType: ObjectType,
-    selectedObject: { elementId: string; displayName: string },
     connection: ConnectionConfig
 ): Promise<HistoryMicroflowResult> {
     const sp = getStudioPro();
+    await ensureBaseUrlConstant(connection.apiBaseUrl);
     await ensureAuthConstants(connection.auth);
-    const selectedElementId = selectedObject.elementId.trim();
-
-    if (!selectedElementId) {
-        throw new Error('Selected object has no valid elementId.');
-    }
-
-    const historyUrl = getObjectsHistoryUrl(connection.apiBaseUrl);
-    if (!historyUrl) {
-        throw new Error(`Cannot build /objects/history URL from '${connection.apiBaseUrl}'.`);
-    }
 
     const typeName = toModelName(objectType.displayName);
-    const objectName = toModelName(selectedObject.displayName);
-    const baseEntityName = toModelName(`${objectType.displayName}_${selectedObject.displayName}`);
-    const microflowName = `MF_${typeName}_${objectName}_History`;
+    const baseEntityName = toModelName(objectType.displayName);
+    const microflowName = `MF_${typeName}_History`;
     const jsonStructureName = `JSON_History_${baseEntityName}`;
     const importMappingName = `IM_History_${baseEntityName}`;
 
@@ -737,9 +787,11 @@ export async function createHistoryMicroflow(
         }
     }
 
+    const historyMappingPayload = buildHistoryMappingPayload(valuePayload);
+
     // Build the history JSON structure: full post-JSLT response shape with one sample entry.
     const historySnippet = JSON.stringify(
-        { Asset: { data: [{ value: valuePayload, timestamp: '2026-01-01T00:00:00.000Z' }] } },
+        { Asset: { data: [historyMappingPayload] } },
         null,
         2
     );
@@ -747,7 +799,7 @@ export async function createHistoryMicroflow(
     const importMappingResult = await createOrUpdateValueImportMapping(
         importMappingName,
         `${IMPLEMENTATION_MODULE}.${jsonStructureName}`,
-        valuePayload, baseEntityName,
+        historyMappingPayload, baseEntityName,
         HISTORY_VALUE_PATH, HISTORY_ENVELOPE_SELECTION_PATHS
     );
 
@@ -765,28 +817,37 @@ export async function createHistoryMicroflow(
 
     const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
 
+    const elementIdParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ElementId', type: 'String' });
+    if (elementIdParam) {
+        elementIdParam.size = { width: 30, height: 30 };
+        elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
+    }
+
     await microflow.objectCollection.addMicroflowParameterObject({ name: 'StartTime', type: 'DateTime' });
     const startTimeParam = microflow.objectCollection.getMicroflowParameterObject('StartTime');
     if (startTimeParam) {
         startTimeParam.size = { width: 30, height: 30 };
-        startTimeParam.relativeMiddlePoint = { x: 100, y: 0 };
+        startTimeParam.relativeMiddlePoint = { x: 200, y: 0 };
     }
 
     await microflow.objectCollection.addMicroflowParameterObject({ name: 'EndTime', type: 'DateTime' });
     const endTimeParam = microflow.objectCollection.getMicroflowParameterObject('EndTime');
     if (endTimeParam) {
         endTimeParam.size = { width: 30, height: 30 };
-        endTimeParam.relativeMiddlePoint = { x: 200, y: 0 };
+        endTimeParam.relativeMiddlePoint = { x: 300, y: 0 };
     }
 
     const jsltHint =
-        `[i3X Connector] Replace this Log Message with a JSLT activity. ` +
-        `Input: $ResponseBody | JSLT: {"Asset": .[keys(.)[0]]} | Output: TransformedBody (String). ` +
-        `Then add an Import Mapping Call using ${IMPLEMENTATION_MODULE}.${importMappingName} with TransformedBody as input.`;
+        `Replace this Log Message with a JSLT activity. ` +
+        `Input: $ResponseBody | JSLT: {{"Asset": .[keys(.)[0]]} | Output: TransformedBody (String). ` +
+        `Then add an Import Mapping Call using ${IMPLEMENTATION_MODULE}.${importMappingName} with TransformedBody as input. ` +
+        `The JSLT text starts with a double opening curly brace only to avoid a Mendix template error; ignore the extra opening brace when copying the JSLT statement.`;
 
-    const { text: bodyText, args: bodyArgs } = buildHistoryMicroflowRequestBody(selectedElementId);
+    const { text: bodyText, args: bodyArgs } = buildHistoryMicroflowRequestBody();
+    const locationTemplate = buildRestLocationTemplate('/objects/history');
     await populateMicroflowWithRestCall(sp, microflow, {
-        url: historyUrl,
+        url: locationTemplate.text,
+        urlArgs: locationTemplate.args,
         requestBody: bodyText,
         requestBodyArgs: bodyArgs,
         extraHeaders: [
@@ -822,6 +883,16 @@ function extractFirstValuePayload(raw: unknown): unknown {
         return valuePayload;
     }
     return {};
+}
+
+function buildHistoryMappingPayload(valuePayload: unknown): Record<string, unknown> {
+    const payload =
+        valuePayload !== null && typeof valuePayload === 'object' && !Array.isArray(valuePayload)
+            ? { ...(valuePayload as Record<string, unknown>) }
+            : {};
+
+    payload.Timestamp = '2026-01-01T00:00:00.000Z';
+    return payload;
 }
 
 function stringifyJsonWithDecimalIntegers(value: unknown): string {
@@ -956,8 +1027,9 @@ const VALUE_RESPONSE_PATH = '(Object)|results|(Object)|result|value';
 const VALUE_ENVELOPE_SELECTION_PATHS: string[] = [];
 
 // Paths in the history response (after JSLT renames the top-level key to "Asset").
-const HISTORY_VALUE_PATH = '(Object)|Asset|data|(Object)|value';
-const HISTORY_ENVELOPE_SELECTION_PATHS = ['(Object)|Asset|data|(Object)|timestamp'];
+// The mapped entity is the array item itself, not a nested value object.
+const HISTORY_VALUE_PATH = '(Object)|Asset|data|(Object)';
+const HISTORY_ENVELOPE_SELECTION_PATHS: string[] = [];
 
 function buildImportMappingEntries(
     value: unknown,
@@ -1062,13 +1134,12 @@ async function createOrUpdateValueImportMapping(
 }
 
 export async function checkValueQueryEntitiesExist(
-    objectType: ObjectType,
-    selectedObject: { displayName: string }
+    objectType: ObjectType
 ): Promise<boolean> {
     const sp = getStudioPro();
     const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
     if (!domainModel) return false;
-    const entityName = toModelName(`${objectType.displayName}_${selectedObject.displayName}`);
+    const entityName = toModelName(objectType.displayName);
     return domainModel.getEntity(entityName) !== undefined;
 }
 
@@ -1081,27 +1152,16 @@ export interface WriteMicroflowResult {
 
 export async function createWriteMicroflow(
     objectType: ObjectType,
-    selectedObject: { elementId: string; displayName: string },
     connection: ConnectionConfig
 ): Promise<WriteMicroflowResult> {
     const sp = getStudioPro();
+    await ensureBaseUrlConstant(connection.apiBaseUrl);
     await ensureAuthConstants(connection.auth);
-    const selectedElementId = selectedObject.elementId.trim();
-
-    if (!selectedElementId) {
-        throw new Error('Selected object has no valid elementId.');
-    }
-
-    const writeUrl = getObjectWriteUrl(connection.apiBaseUrl, selectedElementId);
-    if (!writeUrl) {
-        throw new Error(`Cannot build write URL from '${connection.apiBaseUrl}'.`);
-    }
 
     const typeName = toModelName(objectType.displayName);
-    const objectName = toModelName(selectedObject.displayName);
-    const baseEntityName = toModelName(`${objectType.displayName}_${selectedObject.displayName}`);
-    const microflowName = `MF_${typeName}_${objectName}_Write`;
-    const exportMappingName = `EM_${typeName}_${objectName}`;
+    const baseEntityName = toModelName(objectType.displayName);
+    const microflowName = `MF_${typeName}_Write`;
+    const exportMappingName = `EM_${typeName}`;
 
     const module = await getRequiredProjectModule();
 
@@ -1155,6 +1215,12 @@ export async function createWriteMicroflow(
 
     const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
 
+    const elementIdParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ElementId', type: 'String' });
+    if (elementIdParam) {
+        elementIdParam.size = { width: 30, height: 30 };
+        elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
+    }
+
     const inputParam = await microflow.objectCollection.addMicroflowParameterObject({
         name: 'InputObject',
         type: 'Object',
@@ -1162,11 +1228,13 @@ export async function createWriteMicroflow(
     });
     if (inputParam) {
         inputParam.size = { width: 30, height: 30 };
-        inputParam.relativeMiddlePoint = { x: 100, y: 0 };
+        inputParam.relativeMiddlePoint = { x: 200, y: 0 };
     }
 
+    const locationTemplate = buildRestLocationTemplate('/objects/{2}/value', ['$ElementId']);
     await populateMicroflowWithRestCall(sp, microflow, {
-        url: writeUrl,
+        url: locationTemplate.text,
+        urlArgs: locationTemplate.args,
         requestBody: '',
         exportMapping: {
             mappingQualifiedName: `${IMPLEMENTATION_MODULE}.${exportMappingName}`,
@@ -1187,6 +1255,7 @@ export async function implementObjectAsEntity(
     selectedObject: ObjectType,
     connection: ConnectionConfig
 ): Promise<ImplementEntityResult> {
+    await ensureBaseUrlConstant(connection.apiBaseUrl);
     await ensureAuthConstants(connection.auth);
     const domainModelResult = await buildDomainModelEntities(selectedObject);
 
@@ -1196,14 +1265,15 @@ export async function implementObjectAsEntity(
 
     const objectTypeId = selectedObject.elementId.trim();
     const objectsUrl = objectTypeId ? getObjectsUrl(connection.apiBaseUrl, objectTypeId) : null;
+    const objectsEndpoint = objectTypeId ? buildObjectsEndpoint(objectTypeId) : null;
     const { snippet: jsonSnippet, fetchFailed: jsonFetchFailed } = await buildObjectTypeJsonSnippet(selectedObject, connection, objectsUrl);
     const jsonStructureResult = await createOrUpdateJsonStructure(jsonStructureName, jsonSnippet);
     const importMappingResult = await createOrUpdateImportMapping(
         importMappingName,
         `${IMPLEMENTATION_MODULE}.${jsonStructureName}`
     );
-    const microflowCreated = objectsUrl
-        ? await ensureMicroflowForObject(microflowName, objectsUrl, connection, importMappingResult.mappingId)
+    const microflowCreated = objectsEndpoint
+        ? await ensureMicroflowForObject(microflowName, objectsEndpoint, connection, importMappingResult.mappingId)
         : false;
 
     return {

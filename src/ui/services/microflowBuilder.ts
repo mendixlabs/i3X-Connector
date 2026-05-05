@@ -4,6 +4,7 @@ import { configureHttpAuthForMicroflow } from './auth';
 
 export interface RestMicroflowOptions {
     url: string;
+    urlArgs?: string[];
     requestBody: string;
     requestBodyArgs?: string[];
     extraHeaders?: Array<{ key: string; value: string }>;
@@ -25,26 +26,29 @@ export function buildValueQueryHttpRequestBody(selectedElementId: string): strin
 }`;
 }
 
-export interface HistoryRequestBody {
+export interface RequestTemplate {
     text: string;
     args: string[];
 }
 
-export function buildHistoryMicroflowRequestBody(elementId: string): HistoryRequestBody {
+export function buildHistoryMicroflowRequestBody(): RequestTemplate {
     return {
-        // {1} = elementId (baked in), {2} = $StartTime param, {3} = $EndTime param
+    // {1} = $ElementId, {2} = formatDateTimeUTC($StartTime), {3} = formatDateTimeUTC($EndTime)
         text: `{{"elementIds":["{1}"],"startTime":"{2}","endTime":"{3}"}`,
-        args: [`'${elementId}'`, '$StartTime', '$EndTime'],
+    args: ['$ElementId', 'formatDateTimeUTC($StartTime)', 'formatDateTimeUTC($EndTime)'],
     };
 }
 
-export function buildValueQueryMicroflowRequestBody(selectedElementId: string): string {
-    return `{{
+export function buildValueQueryMicroflowRequestBody(): RequestTemplate {
+        return {
+                text: `{{
   "elementIds": [
-    "${selectedElementId}"
+        "{1}"
   ],
   "maxDepth": 1
-}`;
+}`,
+                args: ['$ElementId'],
+        };
 }
 
 async function addHttpHeadersToConfiguration(
@@ -81,6 +85,19 @@ async function createSequenceFlow(
         sequenceFlow.caseValues = [caseValue];
     }
     return sequenceFlow;
+}
+
+async function createAnnotationFlow(
+    sp: StudioProApi,
+    annotationId: string,
+    targetId: string
+): Promise<Microflows.AnnotationFlow> {
+    const annotationFlow = (await sp.app.model.microflows.createElement(
+        'Microflows$AnnotationFlow'
+    )) as Microflows.AnnotationFlow;
+    annotationFlow.origin = annotationId;
+    annotationFlow.destination = targetId;
+    return annotationFlow;
 }
 
 async function createMessageActivity(
@@ -157,7 +174,7 @@ export async function populateMicroflowWithRestCall(
     microflow: Microflows.Microflow,
     options: RestMicroflowOptions
 ): Promise<void> {
-    const { url, requestBody, requestBodyArgs = [], extraHeaders = [], connection, importMappingId, exportMapping } = options;
+    const { url, urlArgs = [], requestBody, requestBodyArgs = [], extraHeaders = [], connection, importMappingId, exportMapping } = options;
 
     const actionActivity = (await sp.app.model.microflows.createElement(
         'Microflows$ActionActivity'
@@ -248,9 +265,22 @@ export async function populateMicroflowWithRestCall(
     }
 
     httpConfiguration.overrideLocation = true;
-    locationTemplate.text = '{1}';
-    locationTemplateArg.expression = `'${url}'`;
-    locationTemplate.arguments = [locationTemplateArg];
+    if (urlArgs.length > 0) {
+        locationTemplate.text = url;
+        const locationTemplateArgs: Microflows.TemplateArgument[] = [];
+        for (const argExpr of urlArgs) {
+            const templateArg = (await sp.app.model.microflows.createElement(
+                'Microflows$TemplateArgument'
+            )) as Microflows.TemplateArgument;
+            templateArg.expression = argExpr;
+            locationTemplateArgs.push(templateArg);
+        }
+        locationTemplate.arguments = locationTemplateArgs;
+    } else {
+        locationTemplate.text = '{1}';
+        locationTemplateArg.expression = `'${url}'`;
+        locationTemplate.arguments = [locationTemplateArg];
+    }
     httpConfiguration.customLocationTemplate = locationTemplate;
     await configureHttpAuthForMicroflow(sp, httpConfiguration, connection.auth);
     await addHttpHeadersToConfiguration(sp, httpConfiguration, extraHeaders);
@@ -309,7 +339,7 @@ export async function populateMicroflowWithRestCall(
     microflow.flows.push(await createSequenceFlow(sp, actionActivity.$ID, exclusiveSplit.$ID));
 
     const successActivity = options.jsltHint
-        ? await createLogMessageActivity(sp, 'i3X Connector', 'Warning', options.jsltHint)
+        ? await createLogMessageActivity(sp, "'i3X Connector'", 'Warning', options.jsltHint)
         : await createMessageActivity(
             sp,
             'Information',
@@ -322,6 +352,16 @@ export async function populateMicroflowWithRestCall(
     successActivity.size = { width: 120, height: 60 };
     successActivity.relativeMiddlePoint = { x: 800, y: 200 };
     microflow.objectCollection.objects.push(successActivity);
+
+    if (options.jsltHint) {
+        const annotation = await microflow.objectCollection.addAnnotation({
+            caption: options.jsltHint,
+            relativeMiddlePoint: { x: 620, y: 0 },
+            size: { width: 360, height: 130 },
+        });
+        microflow.flows.push(await createAnnotationFlow(sp, annotation.$ID, successActivity.$ID));
+    }
+
     microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, successActivity.$ID, true));
     microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, endEvent.$ID));
 

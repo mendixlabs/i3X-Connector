@@ -370,6 +370,23 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
         }
     };
 
+    const selectedObjectSample = useMemo(() => {
+        if (selectedObjectIndex === null) return null;
+
+        const selected = retrievedObjects[selectedObjectIndex];
+        if (!selected || typeof selected !== 'object') return null;
+
+        const selectedRecord = selected as Record<string, unknown>;
+        const elementIdEntry = Object.entries(selectedRecord).find(([key]) => key.toLowerCase() === 'elementid');
+        const elementIdValue = elementIdEntry?.[1];
+
+        if (typeof elementIdValue !== 'string' || !elementIdValue.trim()) {
+            return null;
+        }
+
+        return { elementId: elementIdValue };
+    }, [selectedObjectIndex, retrievedObjects]);
+
     useEffect(() => {
         let cancelled = false;
 
@@ -424,60 +441,39 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
     }, [connection, item.elementId, studioPro.network.httpProxy]);
 
     useEffect(() => {
-        if (selectedObjectIndex === null) {
-            setWriteEntitiesExist(false);
-            return;
-        }
-        const selected = retrievedObjects[selectedObjectIndex];
-        if (!selected || typeof selected !== 'object') {
-            setWriteEntitiesExist(false);
-            return;
-        }
-        const selectedRecord = selected as Record<string, unknown>;
-        const findField = (fieldName: string): unknown =>
-            Object.entries(selectedRecord).find(([k]) => k.toLowerCase() === fieldName.toLowerCase())?.[1];
-        const rawDisplayName = findField('displayName');
-        const elementIdValue = findField('elementId');
-        const displayNameValue =
-            typeof rawDisplayName === 'string' && rawDisplayName.trim()
-                ? rawDisplayName
-                : typeof elementIdValue === 'string' ? elementIdValue : '';
+        let cancelled = false;
 
-        checkValueQueryEntitiesExist(item, { displayName: displayNameValue })
-            .then(setWriteEntitiesExist)
-            .catch(() => setWriteEntitiesExist(false));
-    }, [selectedObjectIndex, retrievedObjects, item]);
+        setWriteEntitiesExist(false);
+        checkValueQueryEntitiesExist(item)
+            .then(exists => {
+                if (!cancelled) {
+                    setWriteEntitiesExist(exists);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setWriteEntitiesExist(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [item]);
 
     const handleCreateValueQuery = async () => {
-        if (selectedObjectIndex === null || isCreatingQuery) return;
+        if (isCreatingQuery) return;
 
-        const selected = retrievedObjects[selectedObjectIndex];
-        if (!selected || typeof selected !== 'object') {
-            await studioPro.ui.messageBoxes.show('error', 'Invalid selected object', 'Could not read selected object data.');
+        if (!selectedObjectSample) {
+            await studioPro.ui.messageBoxes.show('error', 'Missing sample object', 'Load objects for this type and select a row with a valid elementId first.');
             return;
         }
-
-        const selectedRecord = selected as Record<string, unknown>;
-        const findField = (fieldName: string): unknown =>
-            Object.entries(selectedRecord).find(([k]) => k.toLowerCase() === fieldName.toLowerCase())?.[1];
-
-        const elementIdValue = findField('elementId');
-        if (typeof elementIdValue !== 'string' || !elementIdValue.trim()) {
-            await studioPro.ui.messageBoxes.show('error', 'Missing elementId', 'Selected object does not contain a valid elementId.');
-            return;
-        }
-
-        const rawDisplayName = findField('displayName');
-        const displayNameValue =
-            typeof rawDisplayName === 'string' && rawDisplayName.trim()
-                ? rawDisplayName
-                : elementIdValue;
 
         setIsCreatingQuery(true);
         try {
             const result = await createQueryValuesMicroflow(
                 item,
-                { elementId: elementIdValue, displayName: displayNameValue },
+                selectedObjectSample,
                 connection
             );
             const { somethingCreated, summary } = summarizeArtifactResult(result);
@@ -505,37 +501,11 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
     };
 
     const handleCreateHistoryMicroflow = async () => {
-        if (selectedObjectIndex === null || isCreatingHistory) return;
-
-        const selected = retrievedObjects[selectedObjectIndex];
-        if (!selected || typeof selected !== 'object') {
-            await studioPro.ui.messageBoxes.show('error', 'Invalid selected object', 'Could not read selected object data.');
-            return;
-        }
-
-        const selectedRecord = selected as Record<string, unknown>;
-        const findField = (fieldName: string): unknown =>
-            Object.entries(selectedRecord).find(([k]) => k.toLowerCase() === fieldName.toLowerCase())?.[1];
-
-        const elementIdValue = findField('elementId');
-        if (typeof elementIdValue !== 'string' || !elementIdValue.trim()) {
-            await studioPro.ui.messageBoxes.show('error', 'Missing elementId', 'Selected object does not contain a valid elementId.');
-            return;
-        }
-
-        const rawDisplayName = findField('displayName');
-        const displayNameValue =
-            typeof rawDisplayName === 'string' && rawDisplayName.trim()
-                ? rawDisplayName
-                : elementIdValue;
+        if (isCreatingHistory) return;
 
         setIsCreatingHistory(true);
         try {
-            const result = await createHistoryMicroflow(
-                item,
-                { elementId: elementIdValue, displayName: displayNameValue },
-                connection
-            );
+            const result = await createHistoryMicroflow(item, connection);
             await studioPro.ui.notifications.show({
                 title: result.microflowCreated ? 'History microflow created' : 'History microflow already exists',
                 message: result.microflowCreated
@@ -552,37 +522,11 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
     };
 
     const handleCreateWriteMicroflow = async () => {
-        if (selectedObjectIndex === null || !writeEntitiesExist || isCreatingWrite) return;
-
-        const selected = retrievedObjects[selectedObjectIndex];
-        if (!selected || typeof selected !== 'object') {
-            await studioPro.ui.messageBoxes.show('error', 'Invalid selected object', 'Could not read selected object data.');
-            return;
-        }
-
-        const selectedRecord = selected as Record<string, unknown>;
-        const findField = (fieldName: string): unknown =>
-            Object.entries(selectedRecord).find(([k]) => k.toLowerCase() === fieldName.toLowerCase())?.[1];
-
-        const elementIdValue = findField('elementId');
-        if (typeof elementIdValue !== 'string' || !elementIdValue.trim()) {
-            await studioPro.ui.messageBoxes.show('error', 'Missing elementId', 'Selected object does not contain a valid elementId.');
-            return;
-        }
-
-        const rawDisplayName = findField('displayName');
-        const displayNameValue =
-            typeof rawDisplayName === 'string' && rawDisplayName.trim()
-                ? rawDisplayName
-                : elementIdValue;
+        if (!writeEntitiesExist || isCreatingWrite) return;
 
         setIsCreatingWrite(true);
         try {
-            const result = await createWriteMicroflow(
-                item,
-                { elementId: elementIdValue, displayName: displayNameValue },
-                connection
-            );
+            const result = await createWriteMicroflow(item, connection);
             await studioPro.ui.notifications.show({
                 title: result.microflowCreated ? 'Write microflow created' : 'Write microflow already exists',
                 message: result.microflowCreated
@@ -608,11 +552,35 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 </div>
                 <div className={styles.detailHeaderActions}>
                     <button
-                        className={styles.implementButton}
+                        className={styles.actionButton}
                         onClick={handleImplement}
                         disabled={isImplementing}
                     >
                         {isImplementing ? 'Implementing...' : 'Implement'}
+                    </button>
+                    <button
+                        className={styles.actionButton}
+                        onClick={handleCreateValueQuery}
+                        disabled={!selectedObjectSample || isCreatingQuery}
+                        title={!selectedObjectSample ? 'Load objects for this type and select a row with a valid elementId first.' : undefined}
+                    >
+                        {isCreatingQuery ? 'Creating query...' : 'Create last-known-value query microflow'}
+                    </button>
+                    <button
+                        className={styles.actionButton}
+                        onClick={handleCreateHistoryMicroflow}
+                        disabled={!writeEntitiesExist || isCreatingHistory}
+                        title={!writeEntitiesExist ? 'Create the last-known-value query microflow first.' : undefined}
+                    >
+                        {isCreatingHistory ? 'Creating...' : 'Create history query microflow'}
+                    </button>
+                    <button
+                        className={styles.actionButton}
+                        onClick={handleCreateWriteMicroflow}
+                        disabled={!writeEntitiesExist || isCreatingWrite}
+                        title={!writeEntitiesExist ? 'Create the last-known-value query microflow first.' : undefined}
+                    >
+                        {isCreatingWrite ? 'Creating...' : 'Create write microflow'}
                     </button>
                     <button className={styles.closeButton} onClick={onClose} title="Close">✕</button>
                 </div>
@@ -713,30 +681,6 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                                     ))}
                                 </tbody>
                             </table>
-                            <div className={styles.objectActions}>
-                                <button
-                                    className={styles.implementButton}
-                                    onClick={handleCreateValueQuery}
-                                    disabled={selectedObjectIndex === null || isCreatingQuery}
-                                >
-                                    {isCreatingQuery ? 'Creating query...' : 'Create last-known-value query microflow'}
-                                </button>
-                                <button
-                                    className={styles.implementButton}
-                                    onClick={handleCreateHistoryMicroflow}
-                                    disabled={selectedObjectIndex === null || isCreatingHistory}
-                                >
-                                    {isCreatingHistory ? 'Creating...' : 'Create history query microflow'}
-                                </button>
-                                <button
-                                    className={styles.implementButton}
-                                    onClick={handleCreateWriteMicroflow}
-                                    disabled={selectedObjectIndex === null || !writeEntitiesExist || isCreatingWrite}
-                                    title={!writeEntitiesExist ? 'Run "Create last-known-value query microflow" first' : undefined}
-                                >
-                                    {isCreatingWrite ? 'Creating...' : 'Create write microflow'}
-                                </button>
-                            </div>
                         </>
                     )}
                 </div>
