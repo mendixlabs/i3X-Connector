@@ -13,6 +13,7 @@ export interface RestMicroflowOptions {
         mappingQualifiedName: string;
         entityVariableName: string;
     };
+    jsltHint?: string;
 }
 
 export function buildValueQueryHttpRequestBody(selectedElementId: string): string {
@@ -120,6 +121,31 @@ async function createMessageActivity(
     showMessage.template = textTemplate;
     messageActivity.action = showMessage;
     return messageActivity;
+}
+
+async function createLogMessageActivity(
+    sp: StudioProApi,
+    node: string,
+    level: Microflows.LogLevel,
+    messageText: string
+): Promise<Microflows.ActionActivity> {
+    const activity = (await sp.app.model.microflows.createElement(
+        'Microflows$ActionActivity'
+    )) as Microflows.ActionActivity;
+    const logAction = (await sp.app.model.microflows.createElement(
+        'Microflows$LogMessageAction'
+    )) as Microflows.LogMessageAction;
+    const template = (await sp.app.model.microflows.createElement(
+        'Microflows$StringTemplate'
+    )) as Microflows.StringTemplate;
+
+    template.text = messageText;
+    logAction.messageTemplate = template;
+    logAction.node = node;
+    logAction.level = level;
+    logAction.includeLatestStackTrace = false;
+    activity.action = logAction;
+    return activity;
 }
 
 /**
@@ -282,15 +308,17 @@ export async function populateMicroflowWithRestCall(
     }
     microflow.flows.push(await createSequenceFlow(sp, actionActivity.$ID, exclusiveSplit.$ID));
 
-    const successActivity = await createMessageActivity(
-        sp,
-        'Information',
-        importMappingId
-            ? 'Successfully received and mapped response from i3X API.'
-            : 'Successfully received response from i3X API. Response: {1}',
-        importMappingId ? [] : ['$ResponseBody'],
-        'en_US'
-    );
+    const successActivity = options.jsltHint
+        ? await createLogMessageActivity(sp, 'i3X Connector', 'Warning', options.jsltHint)
+        : await createMessageActivity(
+            sp,
+            'Information',
+            importMappingId
+                ? 'Successfully received and mapped response from i3X API.'
+                : 'Successfully received response from i3X API. Response: {1}',
+            importMappingId ? [] : ['$ResponseBody'],
+            'en_US'
+        );
     successActivity.size = { width: 120, height: 60 };
     successActivity.relativeMiddlePoint = { x: 800, y: 200 };
     microflow.objectCollection.objects.push(successActivity);

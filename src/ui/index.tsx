@@ -117,6 +117,7 @@ export const component: IComponent = {
                             allObjectTypes={isObjectTypeArray(apiData) ? apiData : []}
                             onClose={() => setSelectedItem(null)}
                             onImplement={handleImplement}
+                            onNavigateToType={setSelectedItem}
                         />
                     )}
                 </div>

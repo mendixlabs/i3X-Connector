@@ -96,63 +96,31 @@ function normalizeSampleForMapping(sample: unknown): Record<string, unknown> {
     return { value: sample };
 }
 
-function mergeValueQueryDataPoint(dataPoint: unknown): unknown {
-    if (dataPoint === null || typeof dataPoint !== 'object' || Array.isArray(dataPoint)) {
-        return dataPoint;
-    }
-
-    const pointRecord = dataPoint as Record<string, unknown>;
-    const valuePayload = pointRecord.value;
-
-    if (valuePayload !== null && typeof valuePayload === 'object' && !Array.isArray(valuePayload)) {
-        const mergedPayload = {
-            ...(valuePayload as Record<string, unknown>),
-        };
-
-        for (const [key, value] of Object.entries(pointRecord)) {
-            if (key === 'value' || key in mergedPayload) {
-                continue;
-            }
-            mergedPayload[key] = value;
-        }
-
-        return mergedPayload;
-    }
-
-    return pointRecord;
-}
 
 /**
- * Unwrap the i3X /objects/value response so entities are inferred from the latest
- * value payload while the caller can still keep the raw response text for JSON Structure creation.
+ * Unwrap the i3X v1 /objects/value response so entities are inferred from the value
+ * payload while the caller can still keep the raw response text for JSON Structure creation.
+ *
+ * Response shape: { success, results: [{ elementId, success, result: { isComposition, value, quality, timestamp } }] }
  */
 export function extractValueQueryPayload(sample: unknown): unknown {
     const normalizedSample = normalizeSampleForMapping(sample);
+    const results = (normalizedSample as Record<string, unknown>).results;
 
-    const responseContainers = Object.values(normalizedSample).filter(
-        (value): value is Record<string, unknown> =>
-            value !== null && typeof value === 'object' && !Array.isArray(value)
-    );
+    if (!Array.isArray(results)) return normalizedSample;
 
-    const dataArrays = responseContainers
-        .map(container => container.data)
-        .filter((value): value is unknown[] => Array.isArray(value));
+    const valuePayloads = results
+        .map(item => {
+            if (item === null || typeof item !== 'object' || Array.isArray(item)) return null;
+            const result = (item as Record<string, unknown>).result;
+            if (result === null || typeof result !== 'object' || Array.isArray(result)) return null;
+            return (result as Record<string, unknown>).value ?? null;
+        })
+        .filter((v): v is Record<string, unknown> =>
+            v !== null && typeof v === 'object' && !Array.isArray(v)
+        );
 
-    if (dataArrays.length === 0) {
-        return normalizedSample;
-    }
-
-    const mergedDataPoint = mergeObjectSamples(
-        dataArrays
-            .flat()
-            .map(mergeValueQueryDataPoint)
-            .filter(
-                (value): value is Record<string, unknown> =>
-                    value !== null && typeof value === 'object' && !Array.isArray(value)
-            )
-    );
-
-    return mergedDataPoint ?? mergeValueQueryDataPoint(getRepresentativeArrayItem(dataArrays.flat()));
+    return mergeObjectSamples(valuePayloads) ?? normalizedSample;
 }
 
 export function buildObjectTypeFromSample(displayName: string, sample: unknown): ObjectType {

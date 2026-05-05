@@ -522,10 +522,8 @@ async function createValueQueryArtifacts(
 
     // Value-query entities come from the unwrapped latest-value payload, while
     // the JSON Structure is intentionally created from the raw response body.
-    const generatedObjectType = buildObjectTypeFromSample(
-        baseEntityName,
-        extractValueQueryPayload(sampleResponse.parsed)
-    );
+    const valuePayload = extractValueQueryPayload(sampleResponse.parsed);
+    const generatedObjectType = buildObjectTypeFromSample(baseEntityName, valuePayload);
     const domainModelResult = await buildDomainModelEntities(sp, generatedObjectType, moduleName);
 
     const jsonStructureName = `JSON_${baseEntityName}`;
@@ -538,12 +536,14 @@ async function createValueQueryArtifacts(
         jsonStructureName,
         jsonSnippet
     );
-    const importMappingResult = await createOrUpdateImportMapping(
+    const importMappingResult = await createOrUpdateValueImportMapping(
         sp,
         moduleId,
         moduleName,
         importMappingName,
-        `${moduleName}.${jsonStructureName}`
+        `${moduleName}.${jsonStructureName}`,
+        valuePayload,
+        baseEntityName
     );
 
     return {
@@ -577,7 +577,7 @@ async function buildObjectTypeJsonSnippet(
             return { snippet: fallbackSnippet, fetchFailed: true };
         }
         const data = await response.json();
-        return { snippet: JSON.stringify(sanitizeJsonForMendixLimits(data), null, 2), fetchFailed: false };
+        return { snippet: JSON.stringify(sanitizeJsonForMendixLimits(data.result ?? data), null, 2), fetchFailed: false };
     } catch (err) {
         console.warn('[i3X] Error fetching object instances; JSON structure will use schema fallback.', err);
         return { snippet: fallbackSnippet, fetchFailed: true };
@@ -680,6 +680,10 @@ export async function createQueryValuesMicroflow(
 export interface HistoryMicroflowResult {
     microflowName: string;
     microflowCreated: boolean;
+    jsonStructureName: string;
+    jsonStructureCreated: boolean;
+    importMappingName: string;
+    importMappingCreated: boolean;
 }
 
 export async function createHistoryMicroflow(
@@ -702,16 +706,71 @@ export async function createHistoryMicroflow(
 
     const typeName = toModelName(objectType.displayName);
     const objectName = toModelName(selectedObject.displayName);
+    const baseEntityName = toModelName(`${objectType.displayName}_${selectedObject.displayName}`);
     const microflowName = `MF_${typeName}_${objectName}_History`;
+    const jsonStructureName = `JSON_History_${baseEntityName}`;
+    const importMappingName = `IM_History_${baseEntityName}`;
 
     const module = await getRequiredProjectModule(sp, moduleName);
+
+    // Require value-query artifacts to exist first (same pattern as write microflow).
+    const domainModel = await sp.app.model.domainModels.getDomainModel(moduleName);
+    if (!domainModel || !domainModel.getEntity(baseEntityName)) {
+        throw new Error(
+            `Entity '${baseEntityName}' not found in module '${moduleName}'. ` +
+            `Run "Create last-known-value query microflow" first.`
+        );
+    }
+
+    // Add Timestamp attribute to the shared entity if it isn't there yet.
+    const entity = domainModel.getEntity(baseEntityName)!;
+    if (!entity.getAttribute('Timestamp')) {
+        await entity.addAttribute({ name: 'Timestamp', type: 'DateTime' });
+        await sp.app.model.domainModels.save(domainModel);
+    }
+
+    // Get the value payload from the existing JSON_<Name> structure so we can
+    // build a representative history JSON snippet without a live API call.
+    const rawStructures = await sp.app.model.jsonStructures.getUnitsInfo();
+    const valueStructureInfo = rawStructures.find(
+        u => u.moduleName === moduleName && u.name === `JSON_${baseEntityName}`
+    );
+    let valuePayload: unknown = {};
+    if (valueStructureInfo) {
+        const loaded = await sp.app.model.jsonStructures.loadAll(u => u.$ID === valueStructureInfo.$ID);
+        if (loaded.length > 0 && loaded[0].jsonSnippet) {
+            try {
+                valuePayload = extractFirstValuePayload(JSON.parse(loaded[0].jsonSnippet));
+            } catch { /* keep empty object */ }
+        }
+    }
+
+    // Build the history JSON structure: full post-JSLT response shape with one sample entry.
+    const historySnippet = JSON.stringify(
+        { Asset: { data: [{ value: valuePayload, timestamp: '2026-01-01T00:00:00.000Z' }] } },
+        null,
+        2
+    );
+    const jsonStructureResult = await createOrUpdateJsonStructure(
+        sp, module.$ID, moduleName, jsonStructureName, historySnippet
+    );
+    const importMappingResult = await createOrUpdateValueImportMapping(
+        sp, module.$ID, moduleName, importMappingName,
+        `${moduleName}.${jsonStructureName}`,
+        valuePayload, baseEntityName,
+        HISTORY_VALUE_PATH, HISTORY_ENVELOPE_SELECTION_PATHS
+    );
 
     const existing = await sp.app.model.microflows.loadAll(
         u => u.moduleName === moduleName && u.name === microflowName,
         1
     );
     if (existing.length > 0) {
-        return { microflowName, microflowCreated: false };
+        return {
+            microflowName, microflowCreated: false,
+            jsonStructureName, jsonStructureCreated: jsonStructureResult.created,
+            importMappingName, importMappingCreated: importMappingResult.created,
+        };
     }
 
     const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
@@ -730,6 +789,11 @@ export async function createHistoryMicroflow(
         endTimeParam.relativeMiddlePoint = { x: 200, y: 0 };
     }
 
+    const jsltHint =
+        `[i3X Connector] Replace this Log Message with a JSLT activity. ` +
+        `Input: $ResponseBody | JSLT: {"Asset": .[keys(.)[0]]} | Output: TransformedBody (String). ` +
+        `Then add an Import Mapping Call using ${moduleName}.${importMappingName} with TransformedBody as input.`;
+
     const { text: bodyText, args: bodyArgs } = buildHistoryMicroflowRequestBody(selectedElementId);
     await populateMicroflowWithRestCall(sp, microflow, {
         url: historyUrl,
@@ -740,28 +804,32 @@ export async function createHistoryMicroflow(
             { key: 'Content-Type', value: `'application/json'` },
         ],
         connection,
+        importMappingId: importMappingResult.mappingId,
+        jsltHint,
     });
     await sp.app.model.microflows.save(microflow);
-    return { microflowName, microflowCreated: true };
+    return {
+        microflowName, microflowCreated: true,
+        jsonStructureName, jsonStructureCreated: jsonStructureResult.created,
+        importMappingName, importMappingCreated: importMappingResult.created,
+    };
 }
 
-// Extract the first data[].value object from the raw /objects/value response JSON,
+// Extract the first result's value object from the raw v1 /objects/value response JSON,
 // giving us just the writable properties without quality/timestamp wrappers.
+// Response shape: { success, results: [{ elementId, success, result: { isComposition, value, quality, timestamp } }] }
 function extractFirstValuePayload(raw: unknown): unknown {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {};
-    for (const container of Object.values(raw as Record<string, unknown>)) {
-        if (container !== null && typeof container === 'object' && !Array.isArray(container)) {
-            const dataArray = (container as Record<string, unknown>).data;
-            if (Array.isArray(dataArray) && dataArray.length > 0) {
-                const firstItem = dataArray[0];
-                if (firstItem !== null && typeof firstItem === 'object' && !Array.isArray(firstItem)) {
-                    const valuePayload = (firstItem as Record<string, unknown>).value;
-                    if (valuePayload !== null && typeof valuePayload === 'object' && !Array.isArray(valuePayload)) {
-                        return valuePayload;
-                    }
-                }
-            }
-        }
+    const results = (raw as Record<string, unknown>).results;
+    if (!Array.isArray(results) || results.length === 0) return {};
+
+    const firstEntry = results[0];
+    if (firstEntry === null || typeof firstEntry !== 'object' || Array.isArray(firstEntry)) return {};
+    const result = (firstEntry as Record<string, unknown>).result;
+    if (result === null || typeof result !== 'object' || Array.isArray(result)) return {};
+    const valuePayload = (result as Record<string, unknown>).value;
+    if (valuePayload !== null && typeof valuePayload === 'object' && !Array.isArray(valuePayload)) {
+        return valuePayload;
     }
     return {};
 }
@@ -895,6 +963,127 @@ async function createOrUpdateExportMapping(
     hydratedMapping.parameterName = entityVariableName;
     fixExportMappingElements(hydratedMapping.rootMappingElements, null, moduleName);
     await sp.app.model.exportMappings.save(hydratedMapping);
+
+    return { created: !existingInfo, mappingId: mapping.$ID };
+}
+
+// Paths in the v1 /objects/value envelope that sit above the actual value payload.
+// Array items use |(Object)| as a path segment, as confirmed by jsonStructures.getElements().
+const VALUE_RESPONSE_PATH = '(Object)|results|(Object)|result|value';
+const VALUE_ENVELOPE_SELECTION_PATHS: string[] = [];
+
+// Paths in the history response (after JSLT renames the top-level key to "Asset").
+const HISTORY_VALUE_PATH = '(Object)|Asset|data|(Object)|value';
+const HISTORY_ENVELOPE_SELECTION_PATHS = ['(Object)|Asset|data|(Object)|timestamp'];
+
+function buildImportMappingEntries(
+    value: unknown,
+    path: string,
+    entityName: string,
+    moduleName: string
+): { selectionPaths: string[]; mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[] } {
+    const selectionPaths: string[] = [path];
+    const mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[] = [];
+
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        return { selectionPaths, mapObjects };
+    }
+
+    const obj = value as Record<string, unknown>;
+    const valueMappings: Record<string, string> = {};
+
+    for (const [key, childValue] of Object.entries(obj)) {
+        selectionPaths.push(`${path}|${key}`);
+        if (childValue !== null && typeof childValue === 'object' && !Array.isArray(childValue)) {
+            const child = buildImportMappingEntries(
+                childValue,
+                `${path}|${key}`,
+                `${entityName}_${toModelName(key)}`,
+                moduleName
+            );
+            selectionPaths.push(...child.selectionPaths.slice(1));
+            mapObjects.push(...child.mapObjects);
+        } else {
+            valueMappings[key] = toModelName(key);
+        }
+    }
+
+    mapObjects.unshift({ path, entityQualifiedName: `${moduleName}.${entityName}`, valueMappings });
+    return { selectionPaths, mapObjects };
+}
+
+function fixImportMappingElements(
+    elements: Mappings.ObjectMappingElement[],
+    parentEntityQualifiedName: string | null,
+    moduleName: string
+): void {
+    for (const el of elements) {
+        el.objectHandling = 'Create';
+
+        if (parentEntityQualifiedName !== null && el.entity) {
+            const parentEntityName = parentEntityQualifiedName.split('.').pop() ?? '';
+            const childEntityName = el.entity.split('.').pop() ?? '';
+            el.association = `${moduleName}.${parentEntityName}_${childEntityName}`;
+        } else {
+            el.association = null;
+        }
+
+        fixImportMappingElements(
+            el.children.filter((c): c is Mappings.ObjectMappingElement => 'children' in c),
+            el.entity,
+            moduleName
+        );
+    }
+}
+
+async function createOrUpdateValueImportMapping(
+    sp: StudioProApi,
+    moduleId: string,
+    moduleName: string,
+    mappingName: string,
+    jsonStructureQualifiedName: string,
+    parsedValuePayload: unknown,
+    baseEntityName: string,
+    entityPath = VALUE_RESPONSE_PATH,
+    envelopePaths = VALUE_ENVELOPE_SELECTION_PATHS
+): Promise<ImportMappingResult> {
+    const existingMappings = await sp.app.model.importMappings.getUnitsInfo();
+    const existingInfo = existingMappings.find(
+        u => u.moduleName === moduleName && u.name === mappingName
+    );
+
+    const { selectionPaths, mapObjects } = buildImportMappingEntries(
+        parsedValuePayload,
+        entityPath,
+        baseEntityName,
+        moduleName
+    );
+    const allSelectionPaths = [...envelopePaths, ...selectionPaths];
+
+    const mapping = existingInfo
+        ? (await sp.app.model.importMappings.loadAll(u => u.$ID === existingInfo.$ID))[0] ?? null
+        : await sp.app.model.importMappings.addImportMapping(moduleId, {
+            name: mappingName,
+            selectStructure: {
+                structureType: 'jsonStructure',
+                structureQualifiedName: jsonStructureQualifiedName,
+                selectElements: {
+                    selectionType: 'paths',
+                    selection: allSelectionPaths,
+                },
+            },
+        });
+
+    if (!mapping) {
+        throw new Error(`Import mapping '${mappingName}' could not be loaded.`);
+    }
+
+    await sp.app.model.importMappings.clearElementMapping(mapping.$ID);
+    await sp.app.model.importMappings.setElementMapping(mapping.$ID, mapObjects);
+
+    const hydratedMapping = (await sp.app.model.importMappings.loadAll(u => u.$ID === mapping.$ID))[0] ?? mapping;
+    fixImportMappingElements(hydratedMapping.rootMappingElements, null, moduleName);
+    await sp.app.model.importMappings.save(hydratedMapping);
 
     return { created: !existingInfo, mappingId: mapping.$ID };
 }

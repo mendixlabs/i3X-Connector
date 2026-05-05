@@ -17,6 +17,7 @@ interface Props {
     allObjectTypes: ObjectType[];
     onClose: () => void;
     onImplement: (item: ObjectType) => Promise<void>;
+    onNavigateToType: (type: ObjectType) => void;
 }
 
 // ─── Constraint pills ─────────────────────────────────────────────────────────
@@ -67,14 +68,23 @@ type RefResolver = (ref: string) => ObjectType | null;
 
 // ─── Leaf property row ────────────────────────────────────────────────────────
 
-const LeafRow: React.FC<{ name: string; prop: AnyProperty; required: boolean; depth?: number }> = ({ name, prop, required, depth = 0 }) => (
+const LeafRow: React.FC<{
+    name: string;
+    prop: AnyProperty;
+    required: boolean;
+    depth?: number;
+    linkedType?: ObjectType | null;
+    onNavigate?: (type: ObjectType) => void;
+}> = ({ name, prop, required, depth = 0, linkedType, onNavigate }) => (
     <tr className={styles.propRow}>
         <td className={styles.propNameCell}>
             {Array.from({ length: depth }, (_, i) => <span key={i} className={styles.indent} />)}
             <span className={styles.propName}>{name}</span>
         </td>
         <td className={styles.tableCell}>
-            <TypeBadge prop={prop} />
+            {linkedType
+                ? <span className={styles.componentBadge}>component</span>
+                : <TypeBadge prop={prop} />}
         </td>
         <td className={styles.tableCell}>
             {required
@@ -82,7 +92,11 @@ const LeafRow: React.FC<{ name: string; prop: AnyProperty; required: boolean; de
                 : <span className={styles.textFaint}>optional</span>}
         </td>
         <td className={styles.tableCell}>
-            <ConstraintPills prop={prop} />
+            {linkedType
+                ? (onNavigate
+                    ? <button className={styles.componentLink} onClick={() => onNavigate(linkedType)}>{linkedType.displayName}</button>
+                    : <span className={styles.componentBadge}>{linkedType.displayName}</span>)
+                : <ConstraintPills prop={prop} />}
         </td>
     </tr>
 );
@@ -176,9 +190,19 @@ const ArraySection: React.FC<{ name: string; prop: AnyProperty; isRequired: bool
     );
 };
 
+type ComponentTypeResolver = (name: string, prop: AnyProperty) => ObjectType | null;
+
 // ─── Group section (collapsible, recursive) ───────────────────────────────────
 
-const GroupSection: React.FC<{ name: string; prop: AnyProperty; topRequired: string[]; depth?: number; resolveRef: RefResolver }> = ({ name, prop, topRequired, depth = 0, resolveRef }) => {
+const GroupSection: React.FC<{
+    name: string;
+    prop: AnyProperty;
+    topRequired: string[];
+    depth?: number;
+    resolveRef: RefResolver;
+    resolveComponentType: ComponentTypeResolver;
+    onNavigate: (type: ObjectType) => void;
+}> = ({ name, prop, topRequired, depth = 0, resolveRef, resolveComponentType, onNavigate }) => {
     const [open, setOpen] = useState(true);
     const isRequired = topRequired.includes(name);
 
@@ -192,9 +216,9 @@ const GroupSection: React.FC<{ name: string; prop: AnyProperty; topRequired: str
                 properties: (resolved.schema.properties ?? {}) as Record<string, LeafProperty>,
                 required: resolved.schema.required,
             };
-            return <GroupSection name={name} prop={resolvedProp} topRequired={topRequired} depth={depth} resolveRef={resolveRef} />;
+            return <GroupSection name={name} prop={resolvedProp} topRequired={topRequired} depth={depth} resolveRef={resolveRef} resolveComponentType={resolveComponentType} onNavigate={onNavigate} />;
         }
-        return <LeafRow name={name} prop={prop} required={isRequired} depth={depth} />;
+        return <LeafRow name={name} prop={prop} required={isRequired} depth={depth} linkedType={resolveComponentType(name, prop)} onNavigate={onNavigate} />;
     }
 
     if (isArrayProperty(prop)) {
@@ -202,7 +226,7 @@ const GroupSection: React.FC<{ name: string; prop: AnyProperty; topRequired: str
     }
 
     if (!isGroupProperty(prop)) {
-        return <LeafRow name={name} prop={prop} required={isRequired} depth={depth} />;
+        return <LeafRow name={name} prop={prop} required={isRequired} depth={depth} linkedType={resolveComponentType(name, prop)} onNavigate={onNavigate} />;
     }
 
     const childEntries = Object.entries(prop.properties ?? {});
@@ -231,6 +255,8 @@ const GroupSection: React.FC<{ name: string; prop: AnyProperty; topRequired: str
                     topRequired={groupRequired}
                     depth={depth + 1}
                     resolveRef={resolveRef}
+                    resolveComponentType={resolveComponentType}
+                    onNavigate={onNavigate}
                 />
             ))}
         </>
@@ -268,7 +294,7 @@ function flattenObjectToColumns(
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectTypes, onClose, onImplement }) => {
+const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectTypes, onClose, onImplement, onNavigateToType }) => {
     const studioPro = getStudioProApi(context);
     const [isImplementing, setIsImplementing] = useState(false);
     const [activeTab, setActiveTab] = useState<'attributes' | 'objects'>('attributes');
@@ -289,6 +315,23 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
         const name = extractRefName(ref);
         if (!name) return null;
         return allObjectTypes.find(t => t.elementId === name) ?? null;
+    };
+
+    const resolveComponentType: ComponentTypeResolver = (name: string, prop: AnyProperty): ObjectType | null => {
+        const desc = (prop as Record<string, unknown>).description;
+        if (typeof desc !== 'string' || !desc.toLowerCase().startsWith('composed child:')) return null;
+
+        const related = item['related'] as { types?: string[] } | null | undefined;
+        if (!related?.types?.length) return null;
+
+        const relatedIds = related.types.map((uri: string) => {
+            const colonIdx = uri.lastIndexOf(':');
+            return colonIdx >= 0 ? uri.slice(colonIdx + 1) : uri;
+        });
+
+        const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const matchedId = relatedIds.find(id => id.toLowerCase().replace(/[^a-z0-9]/g, '').includes(normalized)) ?? relatedIds[0];
+        return allObjectTypes.find(t => t.elementId === matchedId) ?? null;
     };
 
     const totalLeafs = entries.reduce((acc, [, prop]) => {
@@ -356,7 +399,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 }
 
                 const data = await response.json();
-                const objects = Array.isArray(data) ? data : [data];
+                const objects = Array.isArray(data) ? data : [];
                 if (!cancelled) {
                     setRetrievedObjects(objects);
                     setSelectedObjectIndex(objects.length > 0 ? 0 : null);
@@ -498,9 +541,9 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
             await studioPro.ui.notifications.show({
                 title: result.microflowCreated ? 'History microflow created' : 'History microflow already exists',
                 message: result.microflowCreated
-                    ? `'${result.microflowName}' created with StartTime and EndTime (DateTime) parameters.`
-                    : `'${result.microflowName}' already exists.`,
-                displayDurationInSeconds: 7,
+                    ? `'${result.microflowName}' created. JSON: '${result.jsonStructureName}', Mapping: '${result.importMappingName}'. Open in Studio Pro and replace the Log Message with a JSLT activity.`
+                    : `'${result.microflowName}' already exists. JSON: '${result.jsonStructureName}', Mapping: '${result.importMappingName}'.`,
+                displayDurationInSeconds: 10,
             });
         } catch (error) {
             const details = error instanceof Error ? error.message : String(error);
@@ -708,7 +751,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                                 <th className={styles.tableHeaderCell} style={{ width: '32%' }}>Property</th>
                                 <th className={styles.tableHeaderCell} style={{ width: '14%' }}>Type</th>
                                 <th className={styles.tableHeaderCell} style={{ width: '14%' }}>Required</th>
-                                <th className={styles.tableHeaderCell} style={{ width: '40%' }}>Constraints</th>
+                                <th className={styles.tableHeaderCell} style={{ width: '40%' }}>Details</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -719,6 +762,8 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                                     prop={prop}
                                     topRequired={topRequired}
                                     resolveRef={resolveRef}
+                                    resolveComponentType={resolveComponentType}
+                                    onNavigate={onNavigateToType}
                                 />
                             ))}
                         </tbody>

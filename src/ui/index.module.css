@@ -925,3 +925,52 @@
     color: #fbbf24;
     border-color: rgba(251, 191, 36, 0.2);
 }
+
+.componentBadge {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    background: rgba(139, 92, 246, 0.1);
+    color: #7c3aed;
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    font-family: "SF Mono", "Fira Code", monospace;
+}
+
+.darkMode .componentBadge {
+    background: rgba(167, 139, 250, 0.1);
+    color: #a78bfa;
+    border-color: rgba(167, 139, 250, 0.2);
+}
+
+.componentLink {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    background: rgba(139, 92, 246, 0.1);
+    color: #7c3aed;
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    font-family: "SF Mono", "Fira Code", monospace;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background var(--transition), border-color var(--transition);
+}
+
+.componentLink:hover {
+    background: rgba(139, 92, 246, 0.2);
+    border-color: rgba(139, 92, 246, 0.45);
+}
+
+.darkMode .componentLink {
+    background: rgba(167, 139, 250, 0.1);
+    color: #a78bfa;
+    border-color: rgba(167, 139, 250, 0.2);
+}
+
+.darkMode .componentLink:hover {
+    background: rgba(167, 139, 250, 0.2);
+    border-color: rgba(167, 139, 250, 0.4);
+}
