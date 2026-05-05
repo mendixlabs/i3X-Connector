@@ -48,7 +48,7 @@ export const component: IComponent = {
                         return;
                     }
 
-                    const result = await implementObjectAsEntity(item, connection, "i3X_Implementation");
+                    const result = await implementObjectAsEntity(item, connection);
 
                     const { somethingCreated, summary } = summarizeArtifactResult(result);
 

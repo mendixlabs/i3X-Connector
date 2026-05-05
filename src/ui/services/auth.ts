@@ -1,4 +1,4 @@
-import type { AuthConfig } from '../types';
+import { IMPLEMENTATION_MODULE, type AuthConfig } from '../types';
 import type { StudioProApi } from '@mendix/extensions-api';
 import type { Microflows } from '@mendix/extensions-api';
 
@@ -55,21 +55,21 @@ export async function configureHttpAuthForMicroflow(
     httpConfiguration: Microflows.HttpConfiguration,
     auth: AuthConfig
 ): Promise<void> {
-    // Handle basic auth via httpConfiguration properties
     if (auth.mode === 'basic') {
         httpConfiguration.useAuthentication = true;
-        httpConfiguration.httpAuthenticationUserName = '${BASIC_AUTH_USERNAME}';
-        httpConfiguration.authenticationPassword = '${BASIC_AUTH_PASSWORD}';
+        httpConfiguration.httpAuthenticationUserName = `@${IMPLEMENTATION_MODULE}.API_Username`;
+        httpConfiguration.authenticationPassword = `@${IMPLEMENTATION_MODULE}.API_Password`;
     }
 
-    // Handle token-based auth via headers
-    if (auth.mode !== 'none' && auth.mode !== 'basic') {
+    if (auth.mode === 'token') {
         const headerName = sanitizeHeaderName(auth.headerName) || 'Authorization';
+        const prefix = auth.prefix.trim();
+        const tokenRef = `@${IMPLEMENTATION_MODULE}.API_Token`;
         const authHeader = (await sp.app.model.microflows.createElement(
             'Microflows$HttpHeaderEntry'
         )) as Microflows.HttpHeaderEntry;
         authHeader.key = headerName;
-        authHeader.value = '${AUTH_TOKEN}';
+        authHeader.value = prefix ? `'${prefix} ' + ${tokenRef}` : tokenRef;
         httpConfiguration.headerEntries.push(authHeader);
     }
 }

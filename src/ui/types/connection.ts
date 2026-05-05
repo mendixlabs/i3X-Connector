@@ -1,3 +1,5 @@
+export const IMPLEMENTATION_MODULE = 'i3X_Implementation';
+
 export type AuthConfig =
     | { mode: 'none' }
     | { mode: 'basic'; username: string; password: string }
