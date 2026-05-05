@@ -479,7 +479,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 item,
                 { elementId: elementIdValue, displayName: displayNameValue },
                 connection,
-                'i3X_Connector'
+                'i3X_Implementation'
             );
             const { somethingCreated, summary } = summarizeArtifactResult(result);
 
@@ -536,7 +536,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 item,
                 { elementId: elementIdValue, displayName: displayNameValue },
                 connection,
-                'i3X_Connector'
+                'i3X_Implementation'
             );
             await studioPro.ui.notifications.show({
                 title: result.microflowCreated ? 'History microflow created' : 'History microflow already exists',
@@ -584,7 +584,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 item,
                 { elementId: elementIdValue, displayName: displayNameValue },
                 connection,
-                'i3X_Connector'
+                'i3X_Implementation'
             );
             await studioPro.ui.notifications.show({
                 title: result.microflowCreated ? 'Write microflow created' : 'Write microflow already exists',

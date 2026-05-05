@@ -48,7 +48,7 @@ export const component: IComponent = {
                         return;
                     }
 
-                    const result = await implementObjectAsEntity(item, connection, "i3X_Connector");
+                    const result = await implementObjectAsEntity(item, connection, "i3X_Implementation");
 
                     const { somethingCreated, summary } = summarizeArtifactResult(result);
 
@@ -70,7 +70,7 @@ export const component: IComponent = {
                         await studioPro.ui.messageBoxes.show(
                             "info",
                             "Nothing new to create",
-                            `Base entity '${result.baseEntityName}', group entities, associations, attributes, JSON Structure '${result.jsonStructureName}', Import Mapping '${result.importMappingName}', and microflow '${result.microflowName}' already exist in module 'i3X_Connector'.`
+                            `Base entity '${result.baseEntityName}', group entities, associations, attributes, JSON Structure '${result.jsonStructureName}', Import Mapping '${result.importMappingName}', and microflow '${result.microflowName}' already exist in module 'i3X_Implementation'.`
                         );
                     }
                 } catch (error) {

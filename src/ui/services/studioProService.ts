@@ -100,9 +100,6 @@ interface ValueQueryArtifactsResult extends DomainModelResult {
     importMappingId: string;
 }
 
-type ModuleLookupApi = {
-    getModule(name: string): Promise<Readonly<Projects.Module> | null>;
-};
 
 type MendixAttributeType = NonNullable<DomainModels.AttributeCreationOptions['type']>;
 const MENDIX_LONG_MIN = Number('-9223372036854775808');
@@ -260,28 +257,11 @@ async function fetchJsonSampleResponse(
     };
 }
 
-async function getProjectModule(
-    sp: StudioProApi,
-    moduleName: string
-): Promise<Readonly<Projects.Module> | null> {
-    const modelWithModules = sp.app.model as typeof sp.app.model & {
-        modules?: ModuleLookupApi;
-    };
-
-    const moduleApi = modelWithModules.modules ?? (sp.app.model.projects as ModuleLookupApi);
-    return moduleApi.getModule(moduleName);
-}
-
 async function getRequiredProjectModule(
     sp: StudioProApi,
     moduleName: string
 ): Promise<Readonly<Projects.Module>> {
-    const module = await getProjectModule(sp, moduleName);
-    if (!module) {
-        throw new Error(`Module '${moduleName}' was not found.`);
-    }
-
-    return module;
+    return (await sp.app.model.modules.getModule(moduleName)) ?? sp.app.model.modules.addModule(moduleName);
 }
 
 // ── Domain model helpers ──────────────────────────────────────────────────────
@@ -614,7 +594,7 @@ export async function createQueryValuesMicroflow(
     objectType: ObjectType,
     selectedObject: { elementId: string; displayName: string },
     connection: ConnectionConfig,
-    moduleName = 'i3X_Connector'
+    moduleName = 'i3X_Implementation'
 ): Promise<QueryValuesMicroflowResult> {
     const sp = getStudioPro();
     const objectTypeName = toModelName(objectType.displayName);
@@ -690,7 +670,7 @@ export async function createHistoryMicroflow(
     objectType: ObjectType,
     selectedObject: { elementId: string; displayName: string },
     connection: ConnectionConfig,
-    moduleName = 'i3X_Connector'
+    moduleName = 'i3X_Implementation'
 ): Promise<HistoryMicroflowResult> {
     const sp = getStudioPro();
     const selectedElementId = selectedObject.elementId.trim();
@@ -1091,7 +1071,7 @@ async function createOrUpdateValueImportMapping(
 export async function checkValueQueryEntitiesExist(
     objectType: ObjectType,
     selectedObject: { displayName: string },
-    moduleName = 'i3X_Connector'
+    moduleName = 'i3X_Implementation'
 ): Promise<boolean> {
     const sp = getStudioPro();
     const domainModel = await sp.app.model.domainModels.getDomainModel(moduleName);
@@ -1111,7 +1091,7 @@ export async function createWriteMicroflow(
     objectType: ObjectType,
     selectedObject: { elementId: string; displayName: string },
     connection: ConnectionConfig,
-    moduleName = 'i3X_Connector'
+    moduleName = 'i3X_Implementation'
 ): Promise<WriteMicroflowResult> {
     const sp = getStudioPro();
     const selectedElementId = selectedObject.elementId.trim();
@@ -1216,7 +1196,7 @@ export async function createWriteMicroflow(
 export async function implementObjectAsEntity(
     selectedObject: ObjectType,
     connection: ConnectionConfig,
-    moduleName = 'i3X_Connector'
+    moduleName = 'i3X_Implementation'
 ): Promise<ImplementEntityResult> {
     const sp = getStudioPro();
     const module = await getRequiredProjectModule(sp, moduleName);
