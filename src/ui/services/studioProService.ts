@@ -1155,11 +1155,12 @@ export async function createWriteMicroflow(
 
     const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
 
-    const inputParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'InputObject', type: 'Object' });
+    const inputParam = await microflow.objectCollection.addMicroflowParameterObject({
+        name: 'InputObject',
+        type: 'Object',
+        entity: `${IMPLEMENTATION_MODULE}.${baseEntityName}`,
+    });
     if (inputParam) {
-        const objType = (await sp.app.model.microflows.createElement('DataTypes$ObjectType')) as DataTypes.ObjectType;
-        objType.entity = `${IMPLEMENTATION_MODULE}.${baseEntityName}`;
-        inputParam.variableType = objType as typeof inputParam.variableType;
         inputParam.size = { width: 30, height: 30 };
         inputParam.relativeMiddlePoint = { x: 100, y: 0 };
     }
