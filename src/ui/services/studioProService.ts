@@ -264,17 +264,6 @@ async function getRequiredProjectModule(): Promise<Readonly<Projects.Module>> {
     return (await sp.app.model.modules.getModule(IMPLEMENTATION_MODULE)) ?? sp.app.model.modules.addModule(IMPLEMENTATION_MODULE);
 }
 
-async function getOrCreateConstant(
-    containerId: string,
-    constantName: string,
-    options: Omit<Constants.ConstantCreationOptions, 'name'>
-): Promise<void> {
-    const sp = getStudioPro();
-    const docs = await sp.app.model.projects.getDocumentsInfo(containerId);
-    if (!docs.some(d => d.$Type === 'Constants$Constant' && d.name === constantName)) {
-        await sp.app.model.constants.addConstant(containerId, { ...options, name: constantName });
-    }
-}
 
 async function ensureAuthConstants(auth: AuthConfig): Promise<void> {
     if (auth.mode === 'none') return;
@@ -284,11 +273,30 @@ async function ensureAuthConstants(auth: AuthConfig): Promise<void> {
     const folder = (await sp.app.model.projects.getFolder(module.$ID, 'Authentication'))
         ?? await sp.app.model.projects.addFolder(module.$ID, 'Authentication');
 
+    const docs = await sp.app.model.projects.getDocumentsInfo(folder.$ID);
+    const hasConstant = (name: string) => docs.some(d => d.$Type === 'Constants$Constant' && d.name === name);
+
+    type ConstantSpec = { name: string; options: Omit<Constants.ConstantCreationOptions, 'name'> };
+    const toCreate: ConstantSpec[] = [];
+
     if (auth.mode === 'basic') {
-        await getOrCreateConstant(folder.$ID, 'API_Username', { type: 'String', defaultValue: '', exposedToClient: false });
-        await getOrCreateConstant(folder.$ID, 'API_Password', { type: 'String', defaultValue: '', exposedToClient: false });
+        if (!hasConstant('API_Username')) toCreate.push({ name: 'API_Username', options: { type: 'String', defaultValue: auth.username, exposedToClient: false } });
+        if (!hasConstant('API_Password')) toCreate.push({ name: 'API_Password', options: { type: 'String', defaultValue: auth.password, exposedToClient: false } });
     } else if (auth.mode === 'token') {
-        await getOrCreateConstant(folder.$ID, 'API_Token', { type: 'String', defaultValue: '', exposedToClient: false });
+        if (!hasConstant('API_Token')) toCreate.push({ name: 'API_Token', options: { type: 'String', defaultValue: auth.token, exposedToClient: false } });
+    }
+
+    if (toCreate.length === 0) return;
+
+    const constantNames = toCreate.map(c => `• ${IMPLEMENTATION_MODULE}.Authentication.${c.name}`).join('\n');
+    const prefill = await sp.ui.messageBoxes.ask({
+        type: 'confirmation',
+        question: `The following Constants will be created in your project to store your authentication credentials:\n\n${constantNames}\n\nDo you want to prefill them with the credentials you entered? Click OK to prefill, or Cancel to create them empty.`,
+    });
+
+    for (const { name, options } of toCreate) {
+        const defaultValue = prefill ? options.defaultValue : '';
+        await sp.app.model.constants.addConstant(folder.$ID, { ...options, defaultValue, name });
     }
 }
 
