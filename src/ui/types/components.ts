@@ -12,4 +12,6 @@ export interface ListProps {
     apiData: unknown;
     selectedId: string | null;
     onSelect: (item: ObjectType) => void;
+    onCreateObjectsList: () => Promise<void>;
+    isCreatingObjectsList: boolean;
 }

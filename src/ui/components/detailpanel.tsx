@@ -16,7 +16,6 @@ interface Props {
     item: ObjectType;
     allObjectTypes: ObjectType[];
     onClose: () => void;
-    onImplement: (item: ObjectType) => Promise<void>;
     onNavigateToType: (type: ObjectType) => void;
 }
 
@@ -294,9 +293,8 @@ function flattenObjectToColumns(
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectTypes, onClose, onImplement, onNavigateToType }) => {
+const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectTypes, onClose, onNavigateToType }) => {
     const studioPro = getStudioProApi(context);
-    const [isImplementing, setIsImplementing] = useState(false);
     const [activeTab, setActiveTab] = useState<'attributes' | 'objects'>('attributes');
     const [isLoadingObjects, setIsLoadingObjects] = useState(true);
     const [isCreatingQuery, setIsCreatingQuery] = useState(false);
@@ -359,16 +357,6 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
     );
     const isElementIdColumn = (column: string) =>
         (column.split('.').pop()?.toLowerCase() ?? '') === 'elementid';
-
-    const handleImplement = async () => {
-        if (isImplementing) return;
-        setIsImplementing(true);
-        try {
-            await onImplement(item);
-        } finally {
-            setIsImplementing(false);
-        }
-    };
 
     const selectedObjectSample = useMemo(() => {
         if (selectedObjectIndex === null) return null;
@@ -551,36 +539,30 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                     <span className={styles.idCell}>{item.elementId}</span>
                 </div>
                 <div className={styles.detailHeaderActions}>
-                    <button
-                        className={styles.actionButton}
-                        onClick={handleImplement}
-                        disabled={isImplementing}
-                    >
-                        {isImplementing ? 'Implementing...' : 'Implement'}
-                    </button>
+                    <span className={styles.detailHeaderActionsLabel}>Create for this ObjectType:</span>
                     <button
                         className={styles.actionButton}
                         onClick={handleCreateValueQuery}
                         disabled={!selectedObjectSample || isCreatingQuery}
                         title={!selectedObjectSample ? 'Load objects for this type and select a row with a valid elementId first.' : undefined}
                     >
-                        {isCreatingQuery ? 'Creating query...' : 'Create last-known-value query microflow'}
+                        {isCreatingQuery ? 'Creating...' : 'Latest Values'}
                     </button>
                     <button
                         className={styles.actionButton}
                         onClick={handleCreateHistoryMicroflow}
                         disabled={!writeEntitiesExist || isCreatingHistory}
-                        title={!writeEntitiesExist ? 'Create the last-known-value query microflow first.' : undefined}
+                        title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
                     >
-                        {isCreatingHistory ? 'Creating...' : 'Create history query microflow'}
+                        {isCreatingHistory ? 'Creating...' : 'History'}
                     </button>
                     <button
                         className={styles.actionButton}
                         onClick={handleCreateWriteMicroflow}
                         disabled={!writeEntitiesExist || isCreatingWrite}
-                        title={!writeEntitiesExist ? 'Create the last-known-value query microflow first.' : undefined}
+                        title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
                     >
-                        {isCreatingWrite ? 'Creating...' : 'Create write microflow'}
+                        {isCreatingWrite ? 'Creating...' : 'Writeback'}
                     </button>
                     <button className={styles.closeButton} onClick={onClose} title="Close">✕</button>
                 </div>

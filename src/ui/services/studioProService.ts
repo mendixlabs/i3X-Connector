@@ -366,6 +366,9 @@ interface EntityCounters {
     nextNestedEntityY: number;
 }
 
+const OBJECT_LIST_ENTITY_NAME = 'i3X_Object';
+const OBJECT_LIST_ATTRIBUTE_NAMES = ['elementId', 'displayName', 'typeElementId', 'parentId'] as const;
+
 function computeEntityStartY(domainModel: DomainModels.DomainModel): number {
     let startY = 0;
     for (const ent of domainModel.entities) {
@@ -507,6 +510,37 @@ async function buildDomainModelEntities(selectedObject: ObjectType): Promise<Dom
     };
 }
 
+async function ensureObjectListEntity(): Promise<DomainModelResult> {
+    const sp = getStudioPro();
+    const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
+    if (!domainModel) {
+        throw new Error(`Module '${IMPLEMENTATION_MODULE}' was not found or has no domain model.`);
+    }
+
+    const startY = computeEntityStartY(domainModel);
+    const entityInfo = await ensureEntity(domainModel, OBJECT_LIST_ENTITY_NAME);
+    if (entityInfo.created) {
+        entityInfo.entity.location = { x: 0, y: startY };
+    }
+
+    let attributesCreated = 0;
+    for (const attributeName of OBJECT_LIST_ATTRIBUTE_NAMES) {
+        if (entityInfo.entity.getAttribute(attributeName)) continue;
+        await entityInfo.entity.addAttribute({ name: attributeName, type: 'String' });
+        attributesCreated += 1;
+    }
+
+    await sp.app.model.domainModels.save(domainModel);
+
+    return {
+        baseEntityName: entityInfo.entityName,
+        baseEntityCreated: entityInfo.created,
+        groupEntitiesCreated: 0,
+        attributesCreated,
+        associationsCreated: 0,
+    };
+}
+
 async function createOrUpdateJsonStructure(
     structureName: string,
     jsonSnippet: string
@@ -533,31 +567,33 @@ async function createOrUpdateJsonStructure(
     return { created: true, jsonStructureId: created.$ID };
 }
 
-async function createOrUpdateImportMapping(
-    mappingName: string,
-    jsonStructureQualifiedName: string
-): Promise<ImportMappingResult> {
-    const sp = getStudioPro();
-    const existingMappings = await sp.app.model.importMappings.getUnitsInfo();
-    const existingInfo = existingMappings.find(
-        u => u.moduleName === IMPLEMENTATION_MODULE && u.name === mappingName
-    );
 
-    if (existingInfo) {
-        return { created: false, mappingId: existingInfo.$ID };
-    }
-
-    const module = await getRequiredProjectModule();
-    const createdMapping = await sp.app.model.importMappings.addImportMapping(module.$ID, {
-        name: mappingName,
-        selectStructure: {
-            structureType: 'jsonStructure',
-            structureQualifiedName: jsonStructureQualifiedName,
-            mapElements: { mappingType: 'automatic' },
+function buildObjectListFallbackSnippet(selectedObject: ObjectType): string {
+    return JSON.stringify([
+        {
+            elementId: `${selectedObject.elementId}_Object`,
+            displayName: selectedObject.displayName,
+            typeElementId: selectedObject.elementId,
+            parentId: '',
+            isComposition: false,
+            isExtended: false,
+            namespaceUri: selectedObject.namespaceUri,
         },
-    });
-    await sp.app.model.importMappings.save(createdMapping);
-    return { created: true, mappingId: createdMapping.$ID };
+    ], null, 2);
+}
+
+function buildGenericObjectListSnippet(): string {
+    return JSON.stringify([
+        {
+            elementId: 'Example.Object',
+            displayName: 'Example Object',
+            typeElementId: 'ExampleObjectType',
+            parentId: 'Example.Parent',
+            isComposition: false,
+            isExtended: false,
+            namespaceUri: 'http://highbyte.com/default',
+        },
+    ], null, 2);
 }
 
 async function createValueQueryArtifacts(
@@ -608,7 +644,7 @@ async function buildObjectTypeJsonSnippet(
     connection: ConnectionConfig,
     objectsUrl: string | null
 ): Promise<{ snippet: string; fetchFailed: boolean }> {
-    const fallbackSnippet = JSON.stringify(sanitizeJsonForMendixLimits(selectedObject), null, 2);
+    const fallbackSnippet = buildObjectListFallbackSnippet(selectedObject);
     if (!objectsUrl) {
         return { snippet: fallbackSnippet, fetchFailed: false };
     }
@@ -624,6 +660,10 @@ async function buildObjectTypeJsonSnippet(
             return { snippet: fallbackSnippet, fetchFailed: true };
         }
         const data = await response.json();
+        if (Array.isArray(data) && data.length === 0) {
+            console.warn('[i3X] Object instances response was empty; JSON structure will use schema fallback.');
+            return { snippet: fallbackSnippet, fetchFailed: true };
+        }
         return { snippet: JSON.stringify(sanitizeJsonForMendixLimits(data.result ?? data), null, 2), fetchFailed: false };
     } catch (err) {
         console.warn('[i3X] Error fetching object instances; JSON structure will use schema fallback.', err);
@@ -631,32 +671,71 @@ async function buildObjectTypeJsonSnippet(
     }
 }
 
-async function ensureMicroflowForObject(
-    microflowName: string,
-    objectsEndpoint: string,
-    connection: ConnectionConfig,
-    importMappingId: string
-): Promise<boolean> {
+async function createOrUpdateObjectListImportMapping(
+    mappingName: string,
+    jsonStructureQualifiedName: string,
+    jsonStructureId: string
+): Promise<ImportMappingResult> {
     const sp = getStudioPro();
-    const existingMicroflows = await sp.app.model.microflows.loadAll(
-        unitInfo => unitInfo.moduleName === IMPLEMENTATION_MODULE && unitInfo.name === microflowName,
-        1
+    const elementsResult = await sp.app.model.jsonStructures.getElements(jsonStructureId);
+    if (!elementsResult.success) {
+        throw new Error(`Could not inspect JSON Structure '${jsonStructureQualifiedName}' for object-list mapping.`);
+    }
+
+    const fieldPaths = OBJECT_LIST_ATTRIBUTE_NAMES.map(attributeName => {
+        const path = Object.keys(elementsResult.elements).find(key => key.endsWith(`|${attributeName}`));
+        if (!path) {
+            throw new Error(`JSON Structure '${jsonStructureQualifiedName}' does not contain '${attributeName}' in the expected object-list format.`);
+        }
+        return path;
+    });
+
+    const itemPath = fieldPaths[0].slice(0, -(`|${OBJECT_LIST_ATTRIBUTE_NAMES[0]}`).length);
+    const selectionPaths = [itemPath, ...fieldPaths];
+    const valueMappings = Object.fromEntries(
+        OBJECT_LIST_ATTRIBUTE_NAMES.map(attributeName => [attributeName, attributeName])
     );
-    if (existingMicroflows.length > 0) return false;
+
+    const existingMappings = await sp.app.model.importMappings.getUnitsInfo();
+    const existingInfo = existingMappings.find(
+        u => u.moduleName === IMPLEMENTATION_MODULE && u.name === mappingName
+    );
 
     const module = await getRequiredProjectModule();
-    const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
-    const locationTemplate = buildRestLocationTemplate(objectsEndpoint);
-    await populateMicroflowWithRestCall(sp, microflow, {
-        url: locationTemplate.text,
-        urlArgs: locationTemplate.args,
-        requestBody: '',
-        connection,
-        importMappingId,
-    });
-    await sp.app.model.microflows.save(microflow);
-    return true;
+    const mapping = existingInfo
+        ? (await sp.app.model.importMappings.loadAll(u => u.$ID === existingInfo.$ID))[0] ?? null
+        : await sp.app.model.importMappings.addImportMapping(module.$ID, {
+            name: mappingName,
+            selectStructure: {
+                structureType: 'jsonStructure',
+                structureQualifiedName: jsonStructureQualifiedName,
+                selectElements: {
+                    selectionType: 'paths',
+                    selection: selectionPaths,
+                },
+            },
+        });
+
+    if (!mapping) {
+        throw new Error(`Import mapping '${mappingName}' could not be loaded.`);
+    }
+
+    await sp.app.model.importMappings.clearElementMapping(mapping.$ID);
+    await sp.app.model.importMappings.setElementMapping(mapping.$ID, [
+        {
+            path: itemPath,
+            entityQualifiedName: `${IMPLEMENTATION_MODULE}.${OBJECT_LIST_ENTITY_NAME}`,
+            valueMappings,
+        },
+    ]);
+
+    const hydratedMapping = (await sp.app.model.importMappings.loadAll(u => u.$ID === mapping.$ID))[0] ?? mapping;
+    fixImportMappingElements(hydratedMapping.rootMappingElements, null);
+    await sp.app.model.importMappings.save(hydratedMapping);
+
+    return { created: !existingInfo, mappingId: mapping.$ID };
 }
+
 
 export async function createQueryValuesMicroflow(
     objectType: ObjectType,
@@ -719,7 +798,12 @@ export async function createQueryValuesMicroflow(
             { key: 'Content-Type', value: `'application/json'` },
         ],
         connection,
-        importMappingId: artifactResult.importMappingId,
+        importMappingQualifiedName: `${IMPLEMENTATION_MODULE}.IM_${objectTypeName}`,
+        importMappingOutput: {
+            outputVariableName: 'MappedObject',
+            entityQualifiedName: `${IMPLEMENTATION_MODULE}.${objectTypeName}`,
+            isList: false,
+        },
     });
     await sp.app.model.microflows.save(microflow);
     return {
@@ -840,7 +924,6 @@ export async function createHistoryMicroflow(
     const jsltHint =
         `Replace this Log Message with a JSLT activity. ` +
         `Input: $ResponseBody | JSLT: {{"Asset": .[keys(.)[0]]} | Output: TransformedBody (String). ` +
-        `Then add an Import Mapping Call using ${IMPLEMENTATION_MODULE}.${importMappingName} with TransformedBody as input. ` +
         `The JSLT text starts with a double opening curly brace only to avoid a Mendix template error; ignore the extra opening brace when copying the JSLT statement.`;
 
     const { text: bodyText, args: bodyArgs } = buildHistoryMicroflowRequestBody();
@@ -855,7 +938,13 @@ export async function createHistoryMicroflow(
             { key: 'Content-Type', value: `'application/json'` },
         ],
         connection,
-        importMappingId: importMappingResult.mappingId,
+        importMappingQualifiedName: `${IMPLEMENTATION_MODULE}.${importMappingName}`,
+        importMappingOutput: {
+            outputVariableName: 'HistoryList',
+            entityQualifiedName: `${IMPLEMENTATION_MODULE}.${baseEntityName}`,
+            isList: true,
+            inputVariableName: 'TransformedBody',
+        },
         jsltHint,
     });
     await sp.app.model.microflows.save(microflow);
@@ -1251,30 +1340,57 @@ export async function createWriteMicroflow(
     return { microflowName, exportMappingName, microflowCreated: true, exportMappingCreated: exportMappingResult.created };
 }
 
-export async function implementObjectAsEntity(
-    selectedObject: ObjectType,
+export async function createObjectsListMicroflow(
     connection: ConnectionConfig
 ): Promise<ImplementEntityResult> {
     await ensureBaseUrlConstant(connection.apiBaseUrl);
     await ensureAuthConstants(connection.auth);
-    const domainModelResult = await buildDomainModelEntities(selectedObject);
+    const domainModelResult = await ensureObjectListEntity();
 
-    const jsonStructureName = `JSON_${domainModelResult.baseEntityName}`;
-    const importMappingName = `IM_${domainModelResult.baseEntityName}`;
-    const microflowName = `MF_${domainModelResult.baseEntityName}`;
+    const jsonStructureName = 'JSON_GetObjectsForObjectType';
+    const importMappingName = 'IM_GetObjectsForObjectType';
+    const microflowName = 'MF_GetObjectsForObjectType';
 
-    const objectTypeId = selectedObject.elementId.trim();
-    const objectsUrl = objectTypeId ? getObjectsUrl(connection.apiBaseUrl, objectTypeId) : null;
-    const objectsEndpoint = objectTypeId ? buildObjectsEndpoint(objectTypeId) : null;
-    const { snippet: jsonSnippet, fetchFailed: jsonFetchFailed } = await buildObjectTypeJsonSnippet(selectedObject, connection, objectsUrl);
+    const jsonSnippet = buildGenericObjectListSnippet();
     const jsonStructureResult = await createOrUpdateJsonStructure(jsonStructureName, jsonSnippet);
-    const importMappingResult = await createOrUpdateImportMapping(
+    const importMappingResult = await createOrUpdateObjectListImportMapping(
         importMappingName,
-        `${IMPLEMENTATION_MODULE}.${jsonStructureName}`
+        `${IMPLEMENTATION_MODULE}.${jsonStructureName}`,
+        jsonStructureResult.jsonStructureId
     );
-    const microflowCreated = objectsEndpoint
-        ? await ensureMicroflowForObject(microflowName, objectsEndpoint, connection, importMappingResult.mappingId)
-        : false;
+
+    const sp = getStudioPro();
+    const existingMicroflows = await sp.app.model.microflows.loadAll(
+        unitInfo => unitInfo.moduleName === IMPLEMENTATION_MODULE && unitInfo.name === microflowName,
+        1
+    );
+
+    let microflowCreated = false;
+    if (existingMicroflows.length === 0) {
+        const module = await getRequiredProjectModule();
+        const microflow = await sp.app.model.microflows.addMicroflow(module.$ID, { name: microflowName }, false);
+        const objectTypeParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ObjectType', type: 'String' });
+        if (objectTypeParam) {
+            objectTypeParam.size = { width: 30, height: 30 };
+            objectTypeParam.relativeMiddlePoint = { x: 100, y: 0 };
+        }
+
+        const locationTemplate = buildRestLocationTemplate('/objects?typeElementId={2}', ['$ObjectType']);
+        await populateMicroflowWithRestCall(sp, microflow, {
+            url: locationTemplate.text,
+            urlArgs: locationTemplate.args,
+            requestBody: '',
+            connection,
+            importMappingQualifiedName: `${IMPLEMENTATION_MODULE}.${importMappingName}`,
+            importMappingOutput: {
+                outputVariableName: 'ImportedObjects',
+                entityQualifiedName: `${IMPLEMENTATION_MODULE}.${OBJECT_LIST_ENTITY_NAME}`,
+                isList: true,
+            },
+        });
+        await sp.app.model.microflows.save(microflow);
+        microflowCreated = true;
+    }
 
     return {
         ...domainModelResult,
@@ -1284,6 +1400,13 @@ export async function implementObjectAsEntity(
         importMappingCreated: importMappingResult.created,
         microflowName,
         microflowCreated,
-        jsonFetchFailed,
+        jsonFetchFailed: false,
     };
+}
+
+export async function implementObjectAsEntity(
+    _selectedObject: ObjectType,
+    connection: ConnectionConfig
+): Promise<ImplementEntityResult> {
+    return createObjectsListMicroflow(connection);
 }

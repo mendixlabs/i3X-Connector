@@ -2,7 +2,7 @@ import React, { StrictMode, useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { IComponent, getStudioProApi } from "@mendix/extensions-api";
 import { Loader, List, DetailPanel } from "./components/_components";
-import { initStudioPro, implementObjectAsEntity, summarizeArtifactResult } from "./services/studioProService";
+import { createObjectsListMicroflow, initStudioPro, summarizeArtifactResult } from "./services/studioProService";
 import { ConnectionConfig, ObjectType, isObjectTypeArray } from "./types";
 import styles from "./index.module.css";
 import "./index.module.css";
@@ -19,6 +19,7 @@ export const component: IComponent = {
             const [apiData, setApiData] = useState<unknown>(null);
             const [connection, setConnection] = useState<ConnectionConfig | null>(null);
             const [selectedItem, setSelectedItem] = useState<ObjectType | null>(null);
+            const [isCreatingObjectsList, setIsCreatingObjectsList] = useState(false);
 
             useEffect(() => {
                 const link = document.createElement("link");
@@ -37,49 +38,49 @@ export const component: IComponent = {
                 setApiData(data);
             };
 
-            const handleImplement = async (item: ObjectType) => {
+            const handleCreateObjectsList = async () => {
+                if (isCreatingObjectsList) {
+                    return;
+                }
+
                 try {
                     if (!connection) {
                         await studioPro.ui.messageBoxes.show(
                             "warning",
                             "No connection configured",
-                            "Load an i3X endpoint first before implementing entities."
+                            "Load an i3X endpoint first before creating the Objects List microflow."
                         );
                         return;
                     }
 
-                    const result = await implementObjectAsEntity(item, connection);
+                    setIsCreatingObjectsList(true);
+
+                    const result = await createObjectsListMicroflow(connection);
 
                     const { somethingCreated, summary } = summarizeArtifactResult(result);
 
-                    if (result.jsonFetchFailed) {
-                        await studioPro.ui.notifications.show({
-                            title: "JSON Structure uses schema fallback",
-                            message: `Could not fetch live object instances from the i3X API. The JSON Structure '${result.jsonStructureName}' was built from the object type schema instead.`,
-                            displayDurationInSeconds: 8,
-                        });
-                    }
-
                     if (somethingCreated) {
                         await studioPro.ui.notifications.show({
-                            title: "Entities implemented",
+                            title: "Objects List created",
                             message: summary,
                             displayDurationInSeconds: 6,
                         });
                     } else {
                         await studioPro.ui.messageBoxes.show(
                             "info",
-                            "Nothing new to create",
-                            `Base entity '${result.baseEntityName}', group entities, associations, attributes, JSON Structure '${result.jsonStructureName}', Import Mapping '${result.importMappingName}', and microflow '${result.microflowName}' already exist in module 'i3X_Implementation'.`
+                            "Objects List already exists",
+                            `Entity '${result.baseEntityName}', JSON Structure '${result.jsonStructureName}', Import Mapping '${result.importMappingName}', and microflow '${result.microflowName}' already exist in module 'i3X_Implementation'.`
                         );
                     }
                 } catch (error) {
                     const details = error instanceof Error ? error.message : String(error);
                     await studioPro.ui.messageBoxes.show(
                         "error",
-                        "Could not implement selected object",
+                        "Could not create Objects List",
                         details
                     );
+                } finally {
+                    setIsCreatingObjectsList(false);
                 }
             };
 
@@ -108,6 +109,8 @@ export const component: IComponent = {
                         apiData={apiData}
                         selectedId={selectedItem?.elementId ?? null}
                         onSelect={handleSelect}
+                        onCreateObjectsList={handleCreateObjectsList}
+                        isCreatingObjectsList={isCreatingObjectsList}
                     />
                     {selectedItem && connection && (
                         <DetailPanel
@@ -116,7 +119,6 @@ export const component: IComponent = {
                             item={selectedItem}
                             allObjectTypes={isObjectTypeArray(apiData) ? apiData : []}
                             onClose={() => setSelectedItem(null)}
-                            onImplement={handleImplement}
                             onNavigateToType={setSelectedItem}
                         />
                     )}

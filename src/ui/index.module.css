@@ -298,6 +298,14 @@
     margin: 0;
 }
 
+.cardHeaderActions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .badge {
     display: inline-flex;
     align-items: center;
@@ -546,6 +554,14 @@
     gap: 8px;
     flex-wrap: wrap;
     justify-content: flex-end;
+}
+
+.detailHeaderActionsLabel {
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+    white-space: nowrap;
 }
 
 .actionButton {

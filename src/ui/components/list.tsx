@@ -12,7 +12,7 @@ const EmptyIcon = () => (
     </svg>
 );
 
-const List: React.FC<ListProps> = ({ apiData, selectedId, onSelect }) => {
+const List: React.FC<ListProps> = ({ apiData, selectedId, onSelect, onCreateObjectsList, isCreatingObjectsList }) => {
     const [items, setItems] = useState<ObjectType[]>([]);
     const [currentPage, setCurrentPage] = useState(1);
 
@@ -39,9 +39,18 @@ const List: React.FC<ListProps> = ({ apiData, selectedId, onSelect }) => {
         <div className={styles.card}>
             <div className={styles.cardHeader}>
                 <h2 className={styles.cardTitle}>Object Types</h2>
-                {items.length > 0 && (
-                    <span className={styles.badge}>{items.length} results</span>
-                )}
+                <div className={styles.cardHeaderActions}>
+                    <button
+                        className={styles.actionButton}
+                        onClick={() => void onCreateObjectsList()}
+                        disabled={isCreatingObjectsList}
+                    >
+                        {isCreatingObjectsList ? 'Creating...' : 'Objects List'}
+                    </button>
+                    {items.length > 0 && (
+                        <span className={styles.badge}>{items.length} results</span>
+                    )}
+                </div>
             </div>
 
             {items.length === 0 ? (

@@ -9,7 +9,13 @@ export interface RestMicroflowOptions {
     requestBodyArgs?: string[];
     extraHeaders?: Array<{ key: string; value: string }>;
     connection: ConnectionConfig;
-    importMappingId?: string;
+    importMappingQualifiedName?: string;
+    importMappingOutput?: {
+        outputVariableName: string;
+        entityQualifiedName: string;
+        isList: boolean;
+        inputVariableName?: string;
+    };
     exportMapping?: {
         mappingQualifiedName: string;
         entityVariableName: string;
@@ -174,7 +180,8 @@ export async function populateMicroflowWithRestCall(
     microflow: Microflows.Microflow,
     options: RestMicroflowOptions
 ): Promise<void> {
-    const { url, urlArgs = [], requestBody, requestBodyArgs = [], extraHeaders = [], connection, importMappingId, exportMapping } = options;
+    const { url, urlArgs = [], requestBody, requestBodyArgs = [], extraHeaders = [], connection, importMappingQualifiedName, importMappingOutput, exportMapping } = options;
+    const shouldImportResponse = Boolean(importMappingQualifiedName && importMappingOutput);
 
     const actionActivity = (await sp.app.model.microflows.createElement(
         'Microflows$ActionActivity'
@@ -287,12 +294,6 @@ export async function populateMicroflowWithRestCall(
     restCall.httpConfiguration = httpConfiguration;
 
     resultHandling.variableType = stringType as typeof resultHandling.variableType;
-
-    // Mendix 11.10 exposes the REST import-mapping hooks needed to bind
-    // ImportMappingCall directly to RestCallAction result handling. On the
-    // current GA extensions API version, creating that model shape causes the
-    // microflow operation to fail, so keep the REST action in string mode for now.
-    void importMappingId;
     resultHandling.storeInVariable = true;
     resultHandling.outputVariableName = 'ResponseBody';
     restCall.resultHandlingType = 'String';
@@ -305,6 +306,53 @@ export async function populateMicroflowWithRestCall(
     actionActivity.size = { width: 120, height: 60 };
     actionActivity.relativeMiddlePoint = { x: 400, y: 200 };
     microflow.objectCollection.objects.push(actionActivity);
+
+    // Separate ImportXmlAction activity on the success branch — mirrors how ExportXmlAction
+    // is used before the REST call on the write side, with contentType 'Json' for JSON mappings.
+    let importActivityId: string | null = null;
+    if (importMappingQualifiedName && importMappingOutput) {
+        const importActivity = (await sp.app.model.microflows.createElement(
+            'Microflows$ActionActivity'
+        )) as Microflows.ActionActivity;
+        const importXmlAction = (await sp.app.model.microflows.createElement(
+            'Microflows$ImportXmlAction'
+        )) as Microflows.ImportXmlAction;
+        const importResultHandling = (await sp.app.model.microflows.createElement(
+            'Microflows$ResultHandling'
+        )) as Microflows.ResultHandling;
+        const importMappingCall = (await sp.app.model.microflows.createElement(
+            'Microflows$ImportMappingCall'
+        )) as Microflows.ImportMappingCall;
+        const importRange = (await sp.app.model.microflows.createElement(
+            'Microflows$ConstantRange'
+        )) as Microflows.ConstantRange;
+        const importVariableType = (await sp.app.model.microflows.createElement(
+            importMappingOutput.isList ? 'DataTypes$ListType' : 'DataTypes$ObjectType'
+        )) as typeof resultHandling.variableType;
+
+        importRange.singleObject = !importMappingOutput.isList;
+        importMappingCall.commit = 'No';
+        importMappingCall.contentType = 'Json';
+        importMappingCall.forceSingleOccurrence = !importMappingOutput.isList;
+        importMappingCall.mapping = importMappingQualifiedName;
+        importMappingCall.range = importRange;
+
+        (importVariableType as { entity?: string }).entity = importMappingOutput.entityQualifiedName;
+        importResultHandling.importMappingCall = importMappingCall;
+        importResultHandling.storeInVariable = true;
+        importResultHandling.outputVariableName = importMappingOutput.outputVariableName;
+        importResultHandling.variableType = importVariableType;
+
+        importXmlAction.xmlDocumentVariableName = importMappingOutput.inputVariableName ?? 'ResponseBody';
+        importXmlAction.resultHandling = importResultHandling;
+        importXmlAction.isValidationRequired = false;
+
+        importActivity.action = importXmlAction;
+        importActivity.size = { width: 120, height: 60 };
+        importActivity.relativeMiddlePoint = { x: options.jsltHint ? 960 : 760, y: 200 };
+        microflow.objectCollection.objects.push(importActivity);
+        importActivityId = importActivity.$ID;
+    }
 
     const exclusiveSplit = (await sp.app.model.microflows.createElement(
         'Microflows$ExclusiveSplit'
@@ -327,7 +375,7 @@ export async function populateMicroflowWithRestCall(
     const endEvent = (await sp.app.model.microflows.createElement(
         'Microflows$EndEvent'
     )) as Microflows.EndEvent;
-    endEvent.relativeMiddlePoint = { x: 900, y: 200 };
+    endEvent.relativeMiddlePoint = { x: importActivityId ? (options.jsltHint ? 1160 : 1100) : 900, y: 200 };
     microflow.objectCollection.objects.push(endEvent);
     
     if (exportActivityId) {
@@ -336,6 +384,7 @@ export async function populateMicroflowWithRestCall(
     } else {
         microflow.flows.push(await createSequenceFlow(sp, startEvent.$ID, actionActivity.$ID));
     }
+
     microflow.flows.push(await createSequenceFlow(sp, actionActivity.$ID, exclusiveSplit.$ID));
 
     const successActivity = options.jsltHint
@@ -343,14 +392,14 @@ export async function populateMicroflowWithRestCall(
         : await createMessageActivity(
             sp,
             'Information',
-            importMappingId
+            shouldImportResponse
                 ? 'Successfully received and mapped response from i3X API.'
                 : 'Successfully received response from i3X API. Response: {1}',
-            importMappingId ? [] : ['$ResponseBody'],
+            shouldImportResponse ? [] : ['$ResponseBody'],
             'en_US'
         );
     successActivity.size = { width: 120, height: 60 };
-    successActivity.relativeMiddlePoint = { x: 800, y: 200 };
+    successActivity.relativeMiddlePoint = { x: options.jsltHint ? 760 : importActivityId ? 960 : 800, y: 200 };
     microflow.objectCollection.objects.push(successActivity);
 
     if (options.jsltHint) {
@@ -362,9 +411,21 @@ export async function populateMicroflowWithRestCall(
         microflow.flows.push(await createAnnotationFlow(sp, annotation.$ID, successActivity.$ID));
     }
 
-    microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, successActivity.$ID, true));
-    microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, endEvent.$ID));
+    if (options.jsltHint && importActivityId) {
+        // Log message placeholder first (JSLT transform), then import mapping reads its output
+        microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, successActivity.$ID, true));
+        microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, importActivityId));
+        microflow.flows.push(await createSequenceFlow(sp, importActivityId, endEvent.$ID));
+    } else if (importActivityId) {
+        microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, importActivityId, true));
+        microflow.flows.push(await createSequenceFlow(sp, importActivityId, successActivity.$ID));
+        microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, endEvent.$ID));
+    } else {
+        microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, successActivity.$ID, true));
+        microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, endEvent.$ID));
+    }
 
+    const errorX = (importActivityId || options.jsltHint) ? 760 : 800;
     const errorActivity = await createMessageActivity(
         sp,
         'Error',
@@ -373,14 +434,14 @@ export async function populateMicroflowWithRestCall(
         'en_US'
     );
     errorActivity.size = { width: 120, height: 60 };
-    errorActivity.relativeMiddlePoint = { x: 800, y: 300 };
+    errorActivity.relativeMiddlePoint = { x: errorX, y: 300 };
     microflow.objectCollection.objects.push(errorActivity);
     microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, errorActivity.$ID, false));
 
     const errorEndEvent = (await sp.app.model.microflows.createElement(
         'Microflows$EndEvent'
     )) as Microflows.EndEvent;
-    errorEndEvent.relativeMiddlePoint = { x: 900, y: 300 };
+    errorEndEvent.relativeMiddlePoint = { x: errorX + 100, y: 300 };
     microflow.objectCollection.objects.push(errorEndEvent);
     microflow.flows.push(await createSequenceFlow(sp, errorActivity.$ID, errorEndEvent.$ID));
 }
