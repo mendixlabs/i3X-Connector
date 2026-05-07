@@ -2,6 +2,23 @@ function trimTrailingSlashes(path: string): string {
     return path.replace(/\/+$/, '');
 }
 
+interface I3xSuccessEnvelope<T> {
+    success: boolean;
+    result: T | null;
+}
+
+/**
+ * Official i3X v1 GET endpoints return payloads in { success, result }.
+ * We only support that envelope shape.
+ */
+export function unwrapI3xResult<T>(raw: unknown): T | null {
+    if (raw !== null && typeof raw === 'object' && 'success' in raw && 'result' in raw) {
+        return (raw as I3xSuccessEnvelope<T>).result;
+    }
+
+    throw new Error('Expected official i3X v1 response envelope { success, result }.');
+}
+
 function buildFromBase(apiBaseUrl: string, endpointPath: string): URL | null {
     try {
         const parsed = new URL(apiBaseUrl.trim());

@@ -1,7 +1,10 @@
 import {
+    isArrayProperty,
     isGroupProperty,
     type AnyProperty,
+    type LeafProperty,
     type ObjectType,
+    type ObjectTypeSchema,
 } from '../types';
 
 function mergeObjectSamples(items: unknown[]): Record<string, unknown> | null {
@@ -96,10 +99,34 @@ function normalizeSampleForMapping(sample: unknown): Record<string, unknown> {
     return { value: sample };
 }
 
+function normalizeValueQueryResultPayload(item: unknown): Record<string, unknown> | null {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+        return null;
+    }
+
+    const result = (item as Record<string, unknown>).result;
+    if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+        return null;
+    }
+
+    const resultObject = result as Record<string, unknown>;
+    const value = resultObject.value ?? null;
+
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        return normalizeSampleForMapping(value);
+    }
+
+    return normalizeSampleForMapping({
+        value,
+        quality: resultObject.quality ?? null,
+        timestamp: resultObject.timestamp ?? null,
+    });
+}
+
 
 /**
- * Unwrap the i3X v1 /objects/value response so entities are inferred from the value
- * payload while the caller can still keep the raw response text for JSON Structure creation.
+ * Unwrap the i3X v1 /objects/value response so entities are inferred from the live
+ * payload shape while the caller can still keep the raw response text for JSON Structure creation.
  *
  * Response shape: { success, results: [{ elementId, success, result: { isComposition, value, quality, timestamp } }] }
  */
@@ -110,17 +137,55 @@ export function extractValueQueryPayload(sample: unknown): unknown {
     if (!Array.isArray(results)) return normalizedSample;
 
     const valuePayloads = results
-        .map(item => {
-            if (item === null || typeof item !== 'object' || Array.isArray(item)) return null;
-            const result = (item as Record<string, unknown>).result;
-            if (result === null || typeof result !== 'object' || Array.isArray(result)) return null;
-            return (result as Record<string, unknown>).value ?? null;
-        })
-        .filter((v): v is Record<string, unknown> =>
-            v !== null && typeof v === 'object' && !Array.isArray(v)
-        );
+        .map(normalizeValueQueryResultPayload)
+        .filter((v): v is Record<string, unknown> => v !== null);
 
     return mergeObjectSamples(valuePayloads) ?? normalizedSample;
+}
+
+function buildDummyPropertyValue(prop: AnyProperty, defs: Record<string, unknown>): unknown {
+    if ('$ref' in prop && typeof (prop as LeafProperty).$ref === 'string') {
+        const key = ((prop as LeafProperty).$ref as string).replace('#/$defs/', '');
+        const resolved = defs[key];
+        if (resolved && typeof resolved === 'object' && 'properties' in (resolved as object))
+            return buildDummyValueFromSchema(resolved as ObjectTypeSchema, defs);
+        return {};
+    }
+    if (isArrayProperty(prop)) return [];
+    if (isGroupProperty(prop)) return buildDummyValueFromSchema(prop as unknown as ObjectTypeSchema, defs);
+    const leaf = prop as LeafProperty;
+    if (leaf.type === 'boolean') return false;
+    if (leaf.type === 'integer' || leaf.type === 'number') return 0;
+    if (leaf.type === 'string')
+        return (leaf.format === 'date-time' || leaf.format === 'date') ? '2000-01-01T00:00:00Z' : '';
+    return null;
+}
+
+function buildDummyValueFromSchema(schema: ObjectTypeSchema, defs: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(
+        Object.entries(schema.properties ?? {}).map(([name, prop]) => [
+            name,
+            buildDummyPropertyValue(prop as AnyProperty, defs),
+        ])
+    );
+}
+
+/**
+ * Build a { rawText, parsed } response mimicking a real /objects/value call,
+ * using schema-derived dummy values. Used when no object instances exist for a type.
+ */
+export function buildSyntheticValueResponse(objectType: ObjectType): { rawText: string; parsed: unknown } {
+    const defs = (objectType.schema.$defs ?? {}) as Record<string, unknown>;
+    const dummyValue = buildDummyValueFromSchema(objectType.schema, defs);
+    const parsed = {
+        success: true,
+        results: [{
+            elementId: objectType.elementId || 'synthetic',
+            success: true,
+            result: { isComposition: false, value: dummyValue, quality: 'Good', timestamp: new Date().toISOString() },
+        }],
+    };
+    return { rawText: JSON.stringify(parsed), parsed };
 }
 
 export function buildObjectTypeFromSample(displayName: string, sample: unknown): ObjectType {

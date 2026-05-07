@@ -40,6 +40,7 @@ const List: React.FC<ListProps> = ({ apiData, selectedId, onSelect, onCreateObje
             <div className={styles.cardHeader}>
                 <h2 className={styles.cardTitle}>Object Types</h2>
                 <div className={styles.cardHeaderActions}>
+                    <span className={styles.detailHeaderActionsLabel}>Generic microflow to retrieve objects for any type:</span>
                     <button
                         className={styles.actionButton}
                         onClick={() => void onCreateObjectsList()}

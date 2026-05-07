@@ -6,6 +6,9 @@
     --primary-light:  #5babff;
     --primary-glow:   rgba(10, 124, 255, 0.15);
 
+    --warning:        #d97706;
+    --warning-hover:  #b45309;
+
     --border:         #e2e6ea;
     --bg-page:        #f0f4f8;
     --bg-card:        #ffffff;
@@ -28,6 +31,9 @@
 
 /* ─── Dark mode overrides ────────────────────────────────────────────────────── */
 .darkMode {
+    --warning:        #f59e0b;
+    --warning-hover:  #fbbf24;
+
     --primary:        #3b9eff;
     --primary-hover:  #5babff;
     --primary-active: #78bcff;
@@ -585,6 +591,16 @@
 .actionButton:disabled {
     opacity: 0.65;
     cursor: not-allowed;
+}
+
+.actionButtonWarning {
+    background: var(--warning);
+    border-color: var(--warning);
+}
+
+.actionButtonWarning:hover:not(:disabled) {
+    background: var(--warning-hover);
+    border-color: var(--warning-hover);
 }
 
 .closeButton {

@@ -20,6 +20,7 @@ export interface RestMicroflowOptions {
         mappingQualifiedName: string;
         entityVariableName: string;
     };
+    annotationText?: string;
     jsltHint?: string;
 }
 
@@ -180,7 +181,18 @@ export async function populateMicroflowWithRestCall(
     microflow: Microflows.Microflow,
     options: RestMicroflowOptions
 ): Promise<void> {
-    const { url, urlArgs = [], requestBody, requestBodyArgs = [], extraHeaders = [], connection, importMappingQualifiedName, importMappingOutput, exportMapping } = options;
+    const {
+        url,
+        urlArgs = [],
+        requestBody,
+        requestBodyArgs = [],
+        extraHeaders = [],
+        connection,
+        importMappingQualifiedName,
+        importMappingOutput,
+        exportMapping,
+        annotationText,
+    } = options;
     const shouldImportResponse = Boolean(importMappingQualifiedName && importMappingOutput);
 
     const actionActivity = (await sp.app.model.microflows.createElement(
@@ -306,6 +318,15 @@ export async function populateMicroflowWithRestCall(
     actionActivity.size = { width: 120, height: 60 };
     actionActivity.relativeMiddlePoint = { x: 400, y: 200 };
     microflow.objectCollection.objects.push(actionActivity);
+
+    if (annotationText) {
+        const annotation = await microflow.objectCollection.addAnnotation({
+            caption: annotationText,
+            relativeMiddlePoint: { x: 400, y: 60 },
+            size: { width: 360, height: 110 },
+        });
+        microflow.flows.push(await createAnnotationFlow(sp, annotation.$ID, actionActivity.$ID));
+    }
 
     // Separate ImportXmlAction activity on the success branch — mirrors how ExportXmlAction
     // is used before the REST call on the write side, with contentType 'Json' for JSON mappings.

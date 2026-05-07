@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { getStudioProApi } from '@mendix/extensions-api';
 import styles from '../index.module.css';
 import { LoaderProps } from '../types';
-import { getObjectTypesUrl } from '../services/i3xUrl';
+import { getObjectTypesUrl, unwrapI3xResult } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
 
 const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) => {
@@ -71,7 +71,8 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
                 await messageApi.show('error', `Request failed with status ${response.status} for '${objectTypesUrl}'.`);
                 return;
             }
-            const data = await response.json();
+            const raw = await response.json();
+            const data = unwrapI3xResult(raw);
             setConnection({
                 apiBaseUrl: url.trim(),
                 auth,

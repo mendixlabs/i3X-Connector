@@ -3,7 +3,7 @@ import { ComponentContext, getStudioProApi } from '@mendix/extensions-api';
 import styles from '../index.module.css';
 import { ObjectType, AnyProperty, LeafProperty, ConnectionConfig, isGroupProperty, isArrayProperty, extractArrayItemProperties } from '../types';
 import { createQueryValuesMicroflow, createHistoryMicroflow, createWriteMicroflow, checkValueQueryEntitiesExist, summarizeArtifactResult, MENDIX_LONG_MAX } from '../services/studioProService';
-import { getObjectsUrl } from '../services/i3xUrl';
+import { getObjectsUrl, unwrapI3xResult } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
 
 function shortNs(uri: string): string {
@@ -403,8 +403,11 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                     return;
                 }
 
-                const data = await response.json();
-                const objects = Array.isArray(data) ? data : [];
+                const raw = await response.json();
+                const unwrappedObjects = unwrapI3xResult<unknown[]>(raw);
+                const objects = Array.isArray(unwrappedObjects)
+                    ? unwrappedObjects ?? []
+                    : [];
                 if (!cancelled) {
                     setRetrievedObjects(objects);
                     setSelectedObjectIndex(objects.length > 0 ? 0 : null);
@@ -453,8 +456,11 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
         if (isCreatingQuery) return;
 
         if (!selectedObjectSample) {
-            await studioPro.ui.messageBoxes.show('error', 'Missing sample object', 'Load objects for this type and select a row with a valid elementId first.');
-            return;
+            const confirmed = await studioPro.ui.messageBoxes.ask({
+                type: 'confirmation',
+                question: 'No objects were found for this type. The microflows can still be generated using the object type schema as a template, but the property types may not fully match what the server actually returns. Continue?',
+            });
+            if (!confirmed) return;
         }
 
         setIsCreatingQuery(true);
@@ -468,9 +474,9 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
 
             if (result.jsonFetchFailed) {
                 await studioPro.ui.notifications.show({
-                    title: "JSON Structure uses schema fallback",
-                    message: `Could not fetch live object instances from the i3X API. The JSON Structure '${result.jsonStructureName}' was built from the object type schema instead.`,
-                    displayDurationInSeconds: 8,
+                    title: 'Generated from schema — not from live data',
+                    message: `No objects were available, so '${result.jsonStructureName}' was built from the object type schema. Property types may not exactly match what the server returns.`,
+                    displayDurationInSeconds: 10,
                 });
             }
 
@@ -497,7 +503,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
             await studioPro.ui.notifications.show({
                 title: result.microflowCreated ? 'History microflow created' : 'History microflow already exists',
                 message: result.microflowCreated
-                    ? `'${result.microflowName}' created. JSON: '${result.jsonStructureName}', Mapping: '${result.importMappingName}'. Open in Studio Pro and replace the Log Message with a JSLT activity.`
+                    ? `'${result.microflowName}' created. JSON: '${result.jsonStructureName}', Mapping: '${result.importMappingName}'.`
                     : `'${result.microflowName}' already exists. JSON: '${result.jsonStructureName}', Mapping: '${result.importMappingName}'.`,
                 displayDurationInSeconds: 10,
             });
@@ -522,6 +528,14 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                     : `'${result.microflowName}' already exists.`,
                 displayDurationInSeconds: 10,
             });
+            if (result.microflowCreated) {
+                await studioPro.ui.editors.editDocument(result.microflowId);
+                await studioPro.ui.messageBoxes.show(
+                    'warning',
+                    'Set writeback REST method to PUT',
+                    `Open '${result.microflowName}' in Studio Pro and change the generated REST call HTTP method to PUT before using the microflow.`
+                );
+            }
         } catch (error) {
             const details = error instanceof Error ? error.message : String(error);
             await studioPro.ui.messageBoxes.show('error', 'Could not create write microflow', details);
@@ -540,33 +554,50 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 </div>
                 <div className={styles.detailHeaderActions}>
                     <span className={styles.detailHeaderActionsLabel}>Create for this ObjectType:</span>
-                    <button
-                        className={styles.actionButton}
-                        onClick={handleCreateValueQuery}
-                        disabled={!selectedObjectSample || isCreatingQuery}
-                        title={!selectedObjectSample ? 'Load objects for this type and select a row with a valid elementId first.' : undefined}
-                    >
-                        {isCreatingQuery ? 'Creating...' : 'Latest Values'}
-                    </button>
-                    <button
-                        className={styles.actionButton}
-                        onClick={handleCreateHistoryMicroflow}
-                        disabled={!writeEntitiesExist || isCreatingHistory}
-                        title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
-                    >
-                        {isCreatingHistory ? 'Creating...' : 'History'}
-                    </button>
-                    <button
-                        className={styles.actionButton}
-                        onClick={handleCreateWriteMicroflow}
-                        disabled={!writeEntitiesExist || isCreatingWrite}
-                        title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
-                    >
-                        {isCreatingWrite ? 'Creating...' : 'Writeback'}
-                    </button>
+                    {(() => {
+                        const noObjects = !isLoadingObjects && retrievedObjects.length === 0;
+                        const btnClass = noObjects
+                            ? `${styles.actionButton} ${styles.actionButtonWarning}`
+                            : styles.actionButton;
+                        return (<>
+                            <button
+                                className={btnClass}
+                                onClick={handleCreateValueQuery}
+                                disabled={isLoadingObjects || isCreatingQuery}
+                            >
+                                {isCreatingQuery ? 'Creating...' : 'Latest Values'}
+                            </button>
+                            <button
+                                className={btnClass}
+                                onClick={handleCreateHistoryMicroflow}
+                                disabled={!writeEntitiesExist || isCreatingHistory}
+                                title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
+                            >
+                                {isCreatingHistory ? 'Creating...' : 'History'}
+                            </button>
+                            <button
+                                className={btnClass}
+                                onClick={handleCreateWriteMicroflow}
+                                disabled={!writeEntitiesExist || isCreatingWrite}
+                                title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
+                            >
+                                {isCreatingWrite ? 'Creating...' : 'Writeback'}
+                            </button>
+                        </>);
+                    })()}
                     <button className={styles.closeButton} onClick={onClose} title="Close">✕</button>
                 </div>
             </div>
+
+            {!isLoadingObjects && (objectsLoadError ? (
+                <p className={styles.noPropsMessage}>
+                    Could not load objects for this type — microflows cannot be created without sample data.
+                </p>
+            ) : retrievedObjects.length === 0 ? (
+                <p className={styles.noPropsMessage}>
+                    No objects found for this type. Any microflows generated will be based on a synthetic template derived from the schema, and may not fully match what the server actually returns.
+                </p>
+            ) : null)}
 
             {/* Meta bar */}
             <div className={styles.detailMeta}>
