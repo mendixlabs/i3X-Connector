@@ -89,8 +89,6 @@ interface ImportMappingResult {
     mappingId: string;
 }
 
-type ImportMappingMode = 'manual' | 'automatic';
-
 interface JsonSampleResponse {
     parsed: unknown;
     rawText: string;
@@ -637,8 +635,7 @@ async function createValueQueryArtifacts(
         valuePayload,
         baseEntityName,
         valueImportEntityPath,
-        VALUE_ENVELOPE_SELECTION_PATHS,
-        'automatic'
+        VALUE_ENVELOPE_SELECTION_PATHS
     );
 
     return {
@@ -1203,8 +1200,7 @@ async function createOrUpdateValueImportMapping(
     parsedValuePayload: unknown,
     baseEntityName: string,
     entityPath = VALUE_RESPONSE_PATH,
-    envelopePaths = VALUE_ENVELOPE_SELECTION_PATHS,
-    mappingMode: ImportMappingMode = 'manual'
+    envelopePaths = VALUE_ENVELOPE_SELECTION_PATHS
 ): Promise<ImportMappingResult> {
     const sp = getStudioPro();
     const existingMappings = await sp.app.model.importMappings.getUnitsInfo();
@@ -1227,19 +1223,11 @@ async function createOrUpdateValueImportMapping(
                     selectionType: 'paths',
                     selection: allSelectionPaths,
                 },
-                ...(mappingMode === 'automatic'
-                    ? { mapElements: { mappingType: 'automatic' as const } }
-                    : {}),
             },
         });
 
     if (!mapping) {
         throw new Error(`Import mapping '${mappingName}' could not be loaded.`);
-    }
-
-    if (mappingMode === 'automatic' && !existingInfo) {
-        await sp.app.model.importMappings.save(mapping);
-        return { created: true, mappingId: mapping.$ID };
     }
 
     await sp.app.model.importMappings.clearElementMapping(mapping.$ID);

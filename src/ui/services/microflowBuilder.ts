@@ -354,7 +354,7 @@ export async function populateMicroflowWithRestCall(
         importRange.singleObject = !importMappingOutput.isList;
         importMappingCall.commit = 'No';
         importMappingCall.contentType = 'Json';
-        importMappingCall.forceSingleOccurrence = !importMappingOutput.isList;
+        importMappingCall.forceSingleOccurrence = false;
         importMappingCall.mapping = importMappingQualifiedName;
         importMappingCall.range = importRange;
 
