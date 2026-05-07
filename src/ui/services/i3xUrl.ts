@@ -52,16 +52,3 @@ export function getObjectsUrl(apiBaseUrl: string, typeId: string): string | null
 export function getObjectsValueUrl(apiBaseUrl: string): string | null {
     return buildFromBase(apiBaseUrl, '/objects/value')?.toString() ?? null;
 }
-
-export function getObjectsHistoryUrl(apiBaseUrl: string): string | null {
-    return buildFromBase(apiBaseUrl, '/objects/history')?.toString() ?? null;
-}
-
-export function getObjectWriteUrl(apiBaseUrl: string, elementId: string): string | null {
-    return buildFromBase(apiBaseUrl, `/objects/${encodeURIComponent(elementId)}/value`)?.toString() ?? null;
-}
-
-export function getObjectWriteUrlTemplate(apiBaseUrl: string): string | null {
-    const writeUrl = buildFromBase(apiBaseUrl, '/objects/{1}/value')?.toString() ?? null;
-    return writeUrl?.replace(/%7B1%7D/gi, '{1}') ?? null;
-}

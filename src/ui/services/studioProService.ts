@@ -1,4 +1,4 @@
-import type { Constants, DataTypes, DomainModels, Mappings, Projects, StudioProApi } from '@mendix/extensions-api';
+import type { Constants, DomainModels, Mappings, Projects, StudioProApi } from '@mendix/extensions-api';
 import {
     IMPLEMENTATION_MODULE,
     isArrayProperty,
@@ -1440,11 +1440,4 @@ export async function createObjectsListMicroflow(
         microflowCreated,
         jsonFetchFailed: false,
     };
-}
-
-export async function implementObjectAsEntity(
-    _selectedObject: ObjectType,
-    connection: ConnectionConfig
-): Promise<ImplementEntityResult> {
-    return createObjectsListMicroflow(connection);
 }
