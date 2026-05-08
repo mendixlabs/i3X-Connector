@@ -9,6 +9,7 @@ import {
     type ConnectionConfig,
     type LeafProperty,
     type ObjectType,
+    type ObjectTypeSchema,
 } from '../types';
 import { getApiBaseUrl, getObjectsUrl, getObjectsValueUrl, unwrapI3xResult } from './i3xUrl';
 import { buildI3xRequestHeaders, sanitizeHeaderName, type AuthConstantRefs } from './auth';
@@ -1029,6 +1030,66 @@ function buildHistoryResponseSample(objectType: ObjectType, valuePayload: unknow
     };
 }
 
+// Like stringifyJsonWithDecimalIntegers but skips the decimal conversion for fields whose
+// schema declares type='integer'. Prevents Mendix from inferring Decimal for Integer fields
+// in the JSON Write structure, which would cause an Integer↔Decimal type mismatch in the
+// generated export mapping.
+function buildSchemaAwareWriteSnippet(
+    requestBody: Record<string, unknown>,
+    valueSchema: ObjectTypeSchema
+): string {
+    const defs = (valueSchema.$defs ?? {}) as Record<string, unknown>;
+    const decimalMarker = '__I3X_DECIMAL_WRITE__';
+
+    function tagValues(value: unknown, props: Record<string, AnyProperty> | null): unknown {
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+            return value;
+        }
+        const obj = value as Record<string, unknown>;
+        return Object.fromEntries(
+            Object.entries(obj).map(([key, childValue]) => {
+                const propSchema = props?.[key] as AnyProperty | undefined;
+
+                let childProps: Record<string, AnyProperty> | null = null;
+                if (propSchema) {
+                    if (isGroupProperty(propSchema)) {
+                        childProps = propSchema.properties as Record<string, AnyProperty>;
+                    } else if ('$ref' in propSchema && typeof (propSchema as LeafProperty).$ref === 'string') {
+                        const refKey = ((propSchema as LeafProperty).$ref as string).replace('#/$defs/', '');
+                        const resolved = defs[refKey];
+                        if (resolved && typeof resolved === 'object' && 'properties' in (resolved as object)) {
+                            childProps = (resolved as ObjectTypeSchema).properties as Record<string, AnyProperty>;
+                        }
+                    }
+                }
+
+                if (childValue !== null && typeof childValue === 'object' && !Array.isArray(childValue)) {
+                    return [key, tagValues(childValue, childProps)];
+                }
+
+                if (typeof childValue === 'number' && Number.isFinite(childValue) && Number.isInteger(childValue)) {
+                    const leafType = (propSchema as LeafProperty | undefined)?.type;
+                    if (leafType !== 'integer') {
+                        return [key, `${decimalMarker}${childValue.toFixed(1)}`];
+                    }
+                }
+
+                return [key, childValue];
+            })
+        );
+    }
+
+    const tagged = tagValues(requestBody, {
+        value: { type: 'object', properties: valueSchema.properties ?? {} } as AnyProperty,
+    });
+
+    const json = JSON.stringify(tagged, null, 2);
+    return json.replace(
+        new RegExp(`"${decimalMarker}(-?(?:0|[1-9]\\d*)\\.0)"`, 'g'),
+        '$1'
+    );
+}
+
 function stringifyJsonWithDecimalIntegers(value: unknown): string {
     const decimalIntegerMarker = '__I3X_DECIMAL_INTEGER__';
     const json = JSON.stringify(
@@ -1126,6 +1187,11 @@ async function createOrUpdateExportMapping(
 
     const { selectionPaths, mapObjects } = buildExportMappingEntries(parsedWriteValue, entityPath, baseEntityName);
 
+    // Export mappings require the document root '(Object)' to be selected for any child
+    // elements to be usable. Import mappings navigate inward from a deep path and don't
+    // need it, but for export the root anchors the serialization traversal.
+    const exportSelectionPaths = ['(Object)', ...selectionPaths];
+
     const mapping = existingInfo
         ? (await sp.app.model.exportMappings.loadAll(u => u.$ID === existingInfo.$ID))[0] ?? null
         : await sp.app.model.exportMappings.addExportMapping(parentId, {
@@ -1135,7 +1201,7 @@ async function createOrUpdateExportMapping(
                 structureQualifiedName: jsonStructureQualifiedName,
                 selectElements: {
                     selectionType: 'paths',
-                    selection: selectionPaths,
+                    selection: exportSelectionPaths,
                 },
             },
         });
@@ -1357,7 +1423,7 @@ export async function createWriteMicroflow(
                 );
                 writeMappingPayload = writePayloadConfig.mappingPayload;
                 writeEntityPath = writePayloadConfig.entityPath;
-                writeSnippet = stringifyJsonWithDecimalIntegers(writePayloadConfig.requestBody);
+                writeSnippet = buildSchemaAwareWriteSnippet(writePayloadConfig.requestBody, objectType.schema);
             } catch {
                 // keep defaults
             }
