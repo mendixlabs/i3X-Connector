@@ -1,6 +1,5 @@
 import type { DataTypes, Microflows, StudioProApi, Texts } from '@mendix/extensions-api';
-import type { ConnectionConfig } from '../types';
-import { configureHttpAuthForMicroflow } from './auth';
+import { configureHttpAuthForMicroflow, type AuthConstantRefs } from './auth';
 
 export interface RestMicroflowOptions {
     url: string;
@@ -8,7 +7,7 @@ export interface RestMicroflowOptions {
     requestBody: string;
     requestBodyArgs?: string[];
     extraHeaders?: Array<{ key: string; value: string }>;
-    connection: ConnectionConfig;
+    authRefs: AuthConstantRefs;
     importMappingQualifiedName?: string;
     importMappingOutput?: {
         outputVariableName: string;
@@ -163,7 +162,7 @@ export async function populateMicroflowWithRestCall(
         requestBody,
         requestBodyArgs = [],
         extraHeaders = [],
-        connection,
+        authRefs,
         importMappingQualifiedName,
         importMappingOutput,
         exportMapping,
@@ -278,7 +277,7 @@ export async function populateMicroflowWithRestCall(
         locationTemplate.arguments = [locationTemplateArg];
     }
     httpConfiguration.customLocationTemplate = locationTemplate;
-    await configureHttpAuthForMicroflow(sp, httpConfiguration, connection.auth);
+    await configureHttpAuthForMicroflow(sp, httpConfiguration, authRefs);
     await addHttpHeadersToConfiguration(sp, httpConfiguration, extraHeaders);
     restCall.httpConfiguration = httpConfiguration;
 

@@ -1,13 +1,18 @@
-import { IMPLEMENTATION_MODULE, type AuthConfig } from '../types';
+import type { AuthConfig } from '../types';
 import type { StudioProApi } from '@mendix/extensions-api';
 import type { Microflows } from '@mendix/extensions-api';
+
+export type AuthConstantRefs =
+    | { mode: 'none' }
+    | { mode: 'basic'; usernameRef: string; passwordRef: string }
+    | { mode: 'token'; tokenRef: string; headerName: string; prefix: string };
 
 function toBase64(value: string): string {
     return btoa(value);
 }
 
 // RFC 7230 token chars; strips anything that could inject extra headers.
-function sanitizeHeaderName(raw: string): string {
+export function sanitizeHeaderName(raw: string): string {
     return raw.replace(/[^\w!#$%&'*+\-.^`|~]/g, '').trim();
 }
 
@@ -53,23 +58,20 @@ export function buildI3xRequestHeaders(auth: AuthConfig): Record<string, string>
 export async function configureHttpAuthForMicroflow(
     sp: StudioProApi,
     httpConfiguration: Microflows.HttpConfiguration,
-    auth: AuthConfig
+    authRefs: AuthConstantRefs
 ): Promise<void> {
-    if (auth.mode === 'basic') {
+    if (authRefs.mode === 'basic') {
         httpConfiguration.useAuthentication = true;
-        httpConfiguration.httpAuthenticationUserName = `@${IMPLEMENTATION_MODULE}.API_Username`;
-        httpConfiguration.authenticationPassword = `@${IMPLEMENTATION_MODULE}.API_Password`;
+        httpConfiguration.httpAuthenticationUserName = authRefs.usernameRef;
+        httpConfiguration.authenticationPassword = authRefs.passwordRef;
     }
 
-    if (auth.mode === 'token') {
-        const headerName = sanitizeHeaderName(auth.headerName) || 'Authorization';
-        const prefix = auth.prefix.trim();
-        const tokenRef = `@${IMPLEMENTATION_MODULE}.API_Token`;
+    if (authRefs.mode === 'token') {
         const authHeader = (await sp.app.model.microflows.createElement(
             'Microflows$HttpHeaderEntry'
         )) as Microflows.HttpHeaderEntry;
-        authHeader.key = headerName;
-        authHeader.value = prefix ? `'${prefix} ' + ${tokenRef}` : tokenRef;
+        authHeader.key = authRefs.headerName;
+        authHeader.value = authRefs.prefix ? `'${authRefs.prefix} ' + ${authRefs.tokenRef}` : authRefs.tokenRef;
         httpConfiguration.headerEntries.push(authHeader);
     }
 }
