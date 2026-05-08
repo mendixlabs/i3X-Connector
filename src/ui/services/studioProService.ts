@@ -902,21 +902,21 @@ export async function createHistoryMicroflow(
         }
     }
 
-    const historyMappingPayload = buildHistoryEntrySample(historyValuePayload);
-    await buildDomainModelEntities(buildObjectTypeFromSample(historyEntityName, historyMappingPayload));
+    await buildHistoryEntities(historyEntityName, baseEntityName);
     await ensureDateTimeAttribute(historyEntityName, 'timestamp');
 
     const historySnippet = stringifyJsonWithDecimalIntegers(
         buildHistoryResponseSample(objectType, historyValuePayload)
     );
     const jsonStructureResult = await createOrUpdateJsonStructure(jsonStructureName, historySnippet, endpointFolderId);
-    const importMappingResult = await createOrUpdateValueImportMapping(
+    const { selectionPaths: historySelPaths, mapObjects: historyMapObjects } = buildHistoryImportMappingEntries(
+        HISTORY_VALUE_PATH, historyEntityName, baseEntityName, historyValuePayload
+    );
+    const importMappingResult = await createOrUpdateImportMapping(
         importMappingName,
         `${IMPLEMENTATION_MODULE}.${jsonStructureName}`,
-        historyMappingPayload,
-        historyEntityName,
-        HISTORY_VALUE_PATH,
-        HISTORY_ENVELOPE_SELECTION_PATHS,
+        [...HISTORY_ENVELOPE_SELECTION_PATHS, ...historySelPaths],
+        historyMapObjects,
         endpointFolderId
     );
 
@@ -1157,15 +1157,24 @@ function buildExportMappingEntries(
     const valueMappings: Record<string, string> = {};
 
     for (const [key, childValue] of Object.entries(obj)) {
+        if (Array.isArray(childValue)) {
+            const mergedItem = mergeArrayObjectItems(childValue);
+            if (mergedItem !== null) {
+                selectionPaths.push(`${path}|${key}`);
+                const child = buildExportMappingEntries(mergedItem, `${path}|${key}|(Object)`, `${entityName}_${toModelName(key)}`);
+                selectionPaths.push(...child.selectionPaths);
+                mapObjects.push(...child.mapObjects);
+            }
+            continue;
+        }
+
         selectionPaths.push(`${path}|${key}`);
-        if (childValue !== null && typeof childValue === 'object' && !Array.isArray(childValue)) {
+        if (childValue !== null && typeof childValue === 'object') {
             const child = buildExportMappingEntries(
                 childValue,
                 `${path}|${key}`,
                 `${entityName}_${toModelName(key)}`
             );
-            // Selection paths for child levels are added by the recursive call;
-            // avoid duplicating the nested object path we already pushed above.
             selectionPaths.push(...child.selectionPaths.slice(1));
             mapObjects.push(...child.mapObjects);
         } else {
@@ -1269,6 +1278,20 @@ function getValueQueryImportEntityPath(raw: unknown): string {
     return VALUE_RESPONSE_PATH;
 }
 
+function mergeArrayObjectItems(arr: unknown[]): Record<string, unknown> | null {
+    const merged: Record<string, unknown> = {};
+    let found = false;
+    for (const item of arr) {
+        if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+            found = true;
+            for (const [k, v] of Object.entries(item as Record<string, unknown>)) {
+                if (!(k in merged) || merged[k] == null) merged[k] = v;
+            }
+        }
+    }
+    return found ? merged : null;
+}
+
 function buildImportMappingEntries(
     value: unknown,
     path: string,
@@ -1285,8 +1308,24 @@ function buildImportMappingEntries(
     const valueMappings: Record<string, string> = {};
 
     for (const [key, childValue] of Object.entries(obj)) {
+        if (Array.isArray(childValue)) {
+            const mergedItem = mergeArrayObjectItems(childValue);
+            if (mergedItem !== null) {
+                // Array of objects → nested entity at the array-item path (|(Object)| convention).
+                // Don't select the array wrapper itself — the |(Object)| in the item path is
+                // sufficient for Mendix to iterate array items. Including the wrapper causes
+                // Mendix to create an intermediate ObjectMappingElement with no entity, which
+                // makes fixImportMappingElements assign an empty parent name to the association.
+                const child = buildImportMappingEntries(mergedItem, `${path}|${key}|(Object)`, `${entityName}_${toModelName(key)}`);
+                selectionPaths.push(...child.selectionPaths);
+                mapObjects.push(...child.mapObjects);
+            }
+            // Non-object arrays have no corresponding entity — skip them
+            continue;
+        }
+
         selectionPaths.push(`${path}|${key}`);
-        if (childValue !== null && typeof childValue === 'object' && !Array.isArray(childValue)) {
+        if (childValue !== null && typeof childValue === 'object') {
             const child = buildImportMappingEntries(
                 childValue,
                 `${path}|${key}`,
@@ -1325,13 +1364,11 @@ function fixImportMappingElements(
     }
 }
 
-async function createOrUpdateValueImportMapping(
+async function createOrUpdateImportMapping(
     mappingName: string,
     jsonStructureQualifiedName: string,
-    parsedValuePayload: unknown,
-    baseEntityName: string,
-    entityPath: string,
-    envelopePaths: string[],
+    allSelectionPaths: string[],
+    mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[],
     parentId: string
 ): Promise<ImportMappingResult> {
     const sp = getStudioPro();
@@ -1339,9 +1376,6 @@ async function createOrUpdateValueImportMapping(
     const existingInfo = existingMappings.find(
         u => u.moduleName === IMPLEMENTATION_MODULE && u.name === mappingName
     );
-
-    const { selectionPaths, mapObjects } = buildImportMappingEntries(parsedValuePayload, entityPath, baseEntityName);
-    const allSelectionPaths = [...envelopePaths, ...selectionPaths];
 
     const mapping = existingInfo
         ? (await sp.app.model.importMappings.loadAll(u => u.$ID === existingInfo.$ID))[0] ?? null
@@ -1369,6 +1403,97 @@ async function createOrUpdateValueImportMapping(
     await sp.app.model.importMappings.save(hydratedMapping);
 
     return { created: !existingInfo, mappingId: mapping.$ID };
+}
+
+async function createOrUpdateValueImportMapping(
+    mappingName: string,
+    jsonStructureQualifiedName: string,
+    parsedValuePayload: unknown,
+    baseEntityName: string,
+    entityPath: string,
+    envelopePaths: string[],
+    parentId: string
+): Promise<ImportMappingResult> {
+    const { selectionPaths, mapObjects } = buildImportMappingEntries(parsedValuePayload, entityPath, baseEntityName);
+    const allSelectionPaths = [...envelopePaths, ...selectionPaths];
+    return createOrUpdateImportMapping(mappingName, jsonStructureQualifiedName, allSelectionPaths, mapObjects, parentId);
+}
+
+// Builds import mapping entries for a history response entry, reusing the existing value
+// entity structure instead of duplicating it under a _History_value sub-entity tree.
+function buildHistoryImportMappingEntries(
+    historyPath: string,
+    historyEntityName: string,
+    baseEntityName: string,
+    valuePayload: unknown
+): { selectionPaths: string[]; mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[] } {
+    const valuePath = `${historyPath}|value`;
+    const valueEntries = buildImportMappingEntries(valuePayload, valuePath, baseEntityName);
+
+    return {
+        selectionPaths: [
+            historyPath,
+            `${historyPath}|quality`,
+            `${historyPath}|timestamp`,
+            ...valueEntries.selectionPaths,
+        ],
+        mapObjects: [
+            {
+                path: historyPath,
+                entityQualifiedName: `${IMPLEMENTATION_MODULE}.${historyEntityName}`,
+                valueMappings: { quality: 'quality', timestamp: 'timestamp' },
+            },
+            ...valueEntries.mapObjects,
+        ],
+    };
+}
+
+// Creates the history entity with quality/timestamp attributes and a direct association
+// to the existing base value entity, without duplicating the value entity sub-tree.
+async function buildHistoryEntities(
+    historyEntityName: string,
+    baseEntityName: string
+): Promise<DomainModelResult> {
+    const sp = getStudioPro();
+    const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
+    if (!domainModel) {
+        throw new Error(`Module '${IMPLEMENTATION_MODULE}' was not found or has no domain model.`);
+    }
+
+    const startY = computeEntityStartY(domainModel);
+    const historyEntityInfo = await ensureEntity(domainModel, historyEntityName);
+    if (historyEntityInfo.created) {
+        historyEntityInfo.entity.location = { x: 0, y: startY };
+    }
+
+    let attributesCreated = 0;
+    if (!historyEntityInfo.entity.getAttribute('quality')) {
+        await historyEntityInfo.entity.addAttribute({ name: 'quality', type: 'String' });
+        attributesCreated++;
+    }
+    if (!historyEntityInfo.entity.getAttribute('timestamp')) {
+        await historyEntityInfo.entity.addAttribute({ name: 'timestamp', type: 'DateTime' });
+        attributesCreated++;
+    }
+
+    const baseEntity = domainModel.getEntity(baseEntityName);
+    let associationsCreated = 0;
+    if (baseEntity) {
+        const assocName = `${historyEntityInfo.entityName}_${baseEntityName}`;
+        if (await ensureAssociation(domainModel, assocName, historyEntityInfo.entity.$ID, baseEntity.$ID, false)) {
+            associationsCreated++;
+        }
+    }
+
+    await sp.app.model.domainModels.save(domainModel);
+
+    return {
+        baseEntityName: historyEntityInfo.entityName,
+        baseEntityCreated: historyEntityInfo.created,
+        groupEntitiesCreated: 0,
+        attributesCreated,
+        associationsCreated,
+    };
 }
 
 export async function checkValueQueryEntitiesExist(
