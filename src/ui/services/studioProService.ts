@@ -777,6 +777,7 @@ export async function createQueryValuesMicroflow(
             entityQualifiedName: `${IMPLEMENTATION_MODULE}.${objectTypeName}`,
             isList: false,
         },
+        returnMappedResult: true,
     });
     await sp.app.model.microflows.save(microflow);
     return {
@@ -907,6 +908,7 @@ export async function createHistoryMicroflow(
             entityQualifiedName: `${IMPLEMENTATION_MODULE}.${historyEntityName}`,
             isList: true,
         },
+        returnMappedResult: true,
     });
     await sp.app.model.microflows.save(microflow);
     return {

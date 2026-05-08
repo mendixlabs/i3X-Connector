@@ -1,4 +1,4 @@
-import type { Microflows, StudioProApi, Texts } from '@mendix/extensions-api';
+import type { DataTypes, Microflows, StudioProApi, Texts } from '@mendix/extensions-api';
 import type { ConnectionConfig } from '../types';
 import { configureHttpAuthForMicroflow } from './auth';
 
@@ -22,6 +22,7 @@ export interface RestMicroflowOptions {
     };
     annotationText?: string;
     jsltHint?: string;
+    returnMappedResult?: boolean;
 }
 
 export function buildValueQueryHttpRequestBody(selectedElementId: string): string {
@@ -40,9 +41,9 @@ export interface RequestTemplate {
 
 export function buildHistoryMicroflowRequestBody(): RequestTemplate {
     return {
-    // {1} = $ElementId, {2} = formatDateTimeUTC($StartTime), {3} = formatDateTimeUTC($EndTime)
+    // {1} = $ElementId, {2} = ISO 8601 UTC start, {3} = ISO 8601 UTC end
         text: `{{"elementIds":["{1}"],"startTime":"{2}","endTime":"{3}"}`,
-    args: ['$ElementId', 'formatDateTimeUTC($StartTime)', 'formatDateTimeUTC($EndTime)'],
+    args: ['$ElementId', "formatDateTimeUTC($StartTime, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')", "formatDateTimeUTC($EndTime, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')"],
     };
 }
 
@@ -192,6 +193,7 @@ export async function populateMicroflowWithRestCall(
         importMappingOutput,
         exportMapping,
         annotationText,
+        returnMappedResult,
     } = options;
     const shouldImportResponse = Boolean(importMappingQualifiedName && importMappingOutput);
 
@@ -354,7 +356,7 @@ export async function populateMicroflowWithRestCall(
         importRange.singleObject = !importMappingOutput.isList;
         importMappingCall.commit = 'No';
         importMappingCall.contentType = 'Json';
-        importMappingCall.forceSingleOccurrence = false;
+        importMappingCall.forceSingleOccurrence = false; // Don't change this, it will make the import mapping fail silently.
         importMappingCall.mapping = importMappingQualifiedName;
         importMappingCall.range = importRange;
 
@@ -393,11 +395,20 @@ export async function populateMicroflowWithRestCall(
     startEvent.relativeMiddlePoint = { x: 100, y: 200 };
     microflow.objectCollection.objects.push(startEvent);
 
-    const endEvent = (await sp.app.model.microflows.createElement(
-        'Microflows$EndEvent'
-    )) as Microflows.EndEvent;
+    const endEvent = await microflow.objectCollection.addEndEvent(
+        returnMappedResult && importMappingOutput
+            ? { returnValue: `$${importMappingOutput.outputVariableName}` }
+            : {}
+    );
     endEvent.relativeMiddlePoint = { x: importActivityId ? (options.jsltHint ? 1160 : 1100) : 900, y: 200 };
-    microflow.objectCollection.objects.push(endEvent);
+
+    if (returnMappedResult && importMappingOutput) {
+        const returnDataType = (await sp.app.model.microflows.createElement(
+            importMappingOutput.isList ? 'DataTypes$ListType' : 'DataTypes$ObjectType'
+        )) as DataTypes.ListType | DataTypes.ObjectType;
+        returnDataType.entity = importMappingOutput.entityQualifiedName;
+        microflow.microflowReturnType = returnDataType;
+    }
     
     if (exportActivityId) {
         microflow.flows.push(await createSequenceFlow(sp, startEvent.$ID, exportActivityId));
@@ -459,10 +470,9 @@ export async function populateMicroflowWithRestCall(
     microflow.objectCollection.objects.push(errorActivity);
     microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, errorActivity.$ID, false));
 
-    const errorEndEvent = (await sp.app.model.microflows.createElement(
-        'Microflows$EndEvent'
-    )) as Microflows.EndEvent;
+    const errorEndEvent = await microflow.objectCollection.addEndEvent(
+        returnMappedResult ? { returnValue: 'empty' } : {}
+    );
     errorEndEvent.relativeMiddlePoint = { x: errorX + 100, y: 300 };
-    microflow.objectCollection.objects.push(errorEndEvent);
     microflow.flows.push(await createSequenceFlow(sp, errorActivity.$ID, errorEndEvent.$ID));
 }
