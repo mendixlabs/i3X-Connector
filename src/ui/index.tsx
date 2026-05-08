@@ -62,9 +62,19 @@ export const component: IComponent = {
                     if (somethingCreated) {
                         await studioPro.ui.notifications.show({
                             title: "Objects List created",
-                            message: summary,
+                            message: result.microflowCreated
+                                ? `${summary}. Open '${result.microflowName}' in Studio Pro and change the REST call HTTP method to GET.`
+                                : summary,
                             displayDurationInSeconds: 6,
                         });
+                        if (result.microflowCreated && result.microflowId) {
+                            await studioPro.ui.editors.editDocument(result.microflowId);
+                            await studioPro.ui.messageBoxes.show(
+                                "warning",
+                                "Set Objects List REST method to GET",
+                                `Open '${result.microflowName}' in Studio Pro and change the generated REST call HTTP method to GET before using the microflow.`
+                            );
+                        }
                     } else {
                         await studioPro.ui.messageBoxes.show(
                             "info",

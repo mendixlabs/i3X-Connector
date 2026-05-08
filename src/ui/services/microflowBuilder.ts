@@ -76,13 +76,19 @@ async function createSequenceFlow(
     sp: StudioProApi,
     startId: string,
     endId: string,
-    exclusiveSplitValue?: boolean
+    exclusiveSplitValue?: boolean,
+    isErrorHandler?: boolean,
+    originConnectionIndex?: number,
+    destinationConnectionIndex?: number
 ): Promise<Microflows.SequenceFlow> {
     const sequenceFlow = (await sp.app.model.microflows.createElement(
         'Microflows$SequenceFlow'
     )) as Microflows.SequenceFlow;
     sequenceFlow.origin = startId;
     sequenceFlow.destination = endId;
+    sequenceFlow.isErrorHandler = isErrorHandler ?? false;
+    if (originConnectionIndex !== undefined) sequenceFlow.originConnectionIndex = originConnectionIndex;
+    if (destinationConnectionIndex !== undefined) sequenceFlow.destinationConnectionIndex = destinationConnectionIndex;
     if (exclusiveSplitValue !== undefined) {
         const caseValue = (await sp.app.model.microflows.createElement(
             'Microflows$EnumerationCase'
@@ -96,13 +102,17 @@ async function createSequenceFlow(
 async function createAnnotationFlow(
     sp: StudioProApi,
     annotationId: string,
-    targetId: string
+    targetId: string,
+    originConnectionIndex?: number,
+    destinationConnectionIndex?: number
 ): Promise<Microflows.AnnotationFlow> {
     const annotationFlow = (await sp.app.model.microflows.createElement(
         'Microflows$AnnotationFlow'
     )) as Microflows.AnnotationFlow;
     annotationFlow.origin = annotationId;
     annotationFlow.destination = targetId;
+    if (originConnectionIndex !== undefined) annotationFlow.originConnectionIndex = originConnectionIndex;
+    if (destinationConnectionIndex !== undefined) annotationFlow.destinationConnectionIndex = destinationConnectionIndex;
     return annotationFlow;
 }
 
@@ -144,6 +154,39 @@ async function createMessageActivity(
     showMessage.template = textTemplate;
     messageActivity.action = showMessage;
     return messageActivity;
+}
+
+
+async function createLogMessageActivity(
+    sp: StudioProApi,
+    messageText: string,
+    expressionArgs: string[]
+): Promise<Microflows.ActionActivity> {
+    const activity = (await sp.app.model.microflows.createElement(
+        'Microflows$ActionActivity'
+    )) as Microflows.ActionActivity;
+    const logAction = (await sp.app.model.microflows.createElement(
+        'Microflows$LogMessageAction'
+    )) as Microflows.LogMessageAction;
+    const template = (await sp.app.model.microflows.createElement(
+        'Microflows$StringTemplate'
+    )) as Microflows.StringTemplate;
+
+    template.text = messageText;
+    for (const argExpr of expressionArgs) {
+        const arg = (await sp.app.model.microflows.createElement(
+            'Microflows$TemplateArgument'
+        )) as Microflows.TemplateArgument;
+        arg.expression = argExpr;
+        template.arguments.push(arg);
+    }
+
+    logAction.messageTemplate = template;
+    logAction.level = 'Error';
+    logAction.node = "'i3X'";
+    logAction.includeLatestStackTrace = false;
+    activity.action = logAction;
+    return activity;
 }
 
 
@@ -288,6 +331,7 @@ export async function populateMicroflowWithRestCall(
 
     restCall.resultHandling = resultHandling;
     restCall.errorResultHandlingType = 'None';
+    restCall.errorHandlingType = 'CustomWithoutRollBack';
     restCall.timeOutExpression = '300';
 
     actionActivity.action = restCall;
@@ -295,13 +339,31 @@ export async function populateMicroflowWithRestCall(
     actionActivity.relativeMiddlePoint = { x: 400, y: 200 };
     microflow.objectCollection.objects.push(actionActivity);
 
+    const logActivity = await createLogMessageActivity(
+        sp,
+        'i3X REST call failed. StatusCode: {1}, ReasonPhrase: {2}, Content: {3}',
+        [
+            'toString($latestHttpResponse/StatusCode)',
+            '$latestHttpResponse/ReasonPhrase',
+            '$latestHttpResponse/Content',
+        ]
+    );
+    logActivity.size = { width: 120, height: 60 };
+    logActivity.relativeMiddlePoint = { x: 400, y: 80 };
+    microflow.objectCollection.objects.push(logActivity);
+
+    const handlerEndEvent = await microflow.objectCollection.addEndEvent(
+        returnMappedResult ? { returnValue: 'empty' } : {}
+    );
+    handlerEndEvent.relativeMiddlePoint = { x: 520, y: 80 };
+
     if (annotationText) {
         const annotation = await microflow.objectCollection.addAnnotation({
             caption: annotationText,
-            relativeMiddlePoint: { x: 400, y: 60 },
-            size: { width: 360, height: 110 },
+            relativeMiddlePoint: { x: 160, y: 120 },
+            size: { width: 280, height: 80 },
         });
-        microflow.flows.push(await createAnnotationFlow(sp, annotation.$ID, actionActivity.$ID));
+        microflow.flows.push(await createAnnotationFlow(sp, annotation.$ID, actionActivity.$ID, 1, 0));
     }
 
     // Separate ImportXmlAction activity on the success branch — mirrors how ExportXmlAction
@@ -392,6 +454,8 @@ export async function populateMicroflowWithRestCall(
     }
 
     microflow.flows.push(await createSequenceFlow(sp, actionActivity.$ID, exclusiveSplit.$ID));
+    microflow.flows.push(await createSequenceFlow(sp, actionActivity.$ID, logActivity.$ID, undefined, true, 0, 2));
+    microflow.flows.push(await createSequenceFlow(sp, logActivity.$ID, handlerEndEvent.$ID));
 
     const successActivity = await createMessageActivity(
         sp,

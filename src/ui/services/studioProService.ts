@@ -50,6 +50,7 @@ export interface ArtifactCreationResult {
     importMappingName: string;
     importMappingCreated: boolean;
     microflowName: string;
+    microflowId?: string;
     microflowCreated: boolean;
     jsonFetchFailed: boolean;
 }
@@ -435,7 +436,7 @@ const OBJECT_LIST_ATTRIBUTE_NAMES = ['elementId', 'displayName', 'typeElementId'
 function computeEntityStartY(domainModel: DomainModels.DomainModel): number {
     let startY = 0;
     for (const ent of domainModel.entities) {
-        const bottom = ent.location.y + ENTITY_HDR_H + ATTR_ROW_H + V_GAP;
+        const bottom = ent.location.y + entityHeight(ent.attributes.length) + V_GAP;
         if (bottom > startY) startY = bottom;
     }
     return startY;
@@ -1656,32 +1657,43 @@ export async function createObjectsListMicroflow(
         unitInfo => unitInfo.moduleName === IMPLEMENTATION_MODULE && unitInfo.name === microflowName,
         1
     );
-
-    let microflowCreated = false;
-    if (existingMicroflows.length === 0) {
-        const microflow = await sp.app.model.microflows.addMicroflow(endpointFolderId, { name: microflowName }, false);
-        const objectTypeParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ObjectType', type: 'String' });
-        if (objectTypeParam) {
-            objectTypeParam.size = { width: 30, height: 30 };
-            objectTypeParam.relativeMiddlePoint = { x: 100, y: 0 };
-        }
-
-        const locationTemplate = buildRestLocationTemplate('/objects?typeElementId={2}', baseUrlConstantRef, ['$ObjectType']);
-        await populateMicroflowWithRestCall(sp, microflow, {
-            url: locationTemplate.text,
-            urlArgs: locationTemplate.args,
-            requestBody: '',
-            authRefs,
-            importMappingQualifiedName: `${IMPLEMENTATION_MODULE}.${importMappingName}`,
-            importMappingOutput: {
-                outputVariableName: 'ImportedObjects',
-                entityQualifiedName: `${IMPLEMENTATION_MODULE}.${OBJECT_LIST_ENTITY_NAME}`,
-                isList: true,
-            },
-        });
-        await sp.app.model.microflows.save(microflow);
-        microflowCreated = true;
+    if (existingMicroflows.length > 0) {
+        return {
+            ...domainModelResult,
+            jsonStructureName,
+            jsonStructureCreated: jsonStructureResult.created,
+            importMappingName,
+            importMappingCreated: importMappingResult.created,
+            microflowName,
+            microflowId: existingMicroflows[0].$ID,
+            microflowCreated: false,
+            jsonFetchFailed: false,
+        };
     }
+
+    const microflow = await sp.app.model.microflows.addMicroflow(endpointFolderId, { name: microflowName }, false);
+    const objectTypeParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ObjectType', type: 'String' });
+    if (objectTypeParam) {
+        objectTypeParam.size = { width: 30, height: 30 };
+        objectTypeParam.relativeMiddlePoint = { x: 100, y: 0 };
+    }
+
+    const locationTemplate = buildRestLocationTemplate('/objects?typeElementId={2}', baseUrlConstantRef, ['$ObjectType']);
+    await populateMicroflowWithRestCall(sp, microflow, {
+        url: locationTemplate.text,
+        urlArgs: locationTemplate.args,
+        requestBody: '',
+        authRefs,
+        importMappingQualifiedName: `${IMPLEMENTATION_MODULE}.${importMappingName}`,
+        importMappingOutput: {
+            outputVariableName: 'ImportedObjects',
+            entityQualifiedName: `${IMPLEMENTATION_MODULE}.${OBJECT_LIST_ENTITY_NAME}`,
+            isList: true,
+        },
+        annotationText: 'Official i3X object listing uses GET /objects?typeElementId={objectType}. Change this REST call HTTP method to GET manually before using this microflow.',
+        returnMappedResult: true,
+    });
+    await sp.app.model.microflows.save(microflow);
 
     return {
         ...domainModelResult,
@@ -1690,7 +1702,8 @@ export async function createObjectsListMicroflow(
         importMappingName,
         importMappingCreated: importMappingResult.created,
         microflowName,
-        microflowCreated,
+        microflowId: microflow.$ID,
+        microflowCreated: true,
         jsonFetchFailed: false,
     };
 }
