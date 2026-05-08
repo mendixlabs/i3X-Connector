@@ -143,6 +143,11 @@ export function extractValueQueryPayload(sample: unknown): unknown {
     return mergeObjectSamples(valuePayloads) ?? normalizedSample;
 }
 
+function primaryType(type: unknown): string | undefined {
+    if (Array.isArray(type)) return (type as string[]).find(t => t !== 'null');
+    return typeof type === 'string' ? type : undefined;
+}
+
 function buildDummyPropertyValue(prop: AnyProperty, defs: Record<string, unknown>): unknown {
     if ('$ref' in prop && typeof (prop as LeafProperty).$ref === 'string') {
         const key = ((prop as LeafProperty).$ref as string).replace('#/$defs/', '');
@@ -154,9 +159,10 @@ function buildDummyPropertyValue(prop: AnyProperty, defs: Record<string, unknown
     if (isArrayProperty(prop)) return [];
     if (isGroupProperty(prop)) return buildDummyValueFromSchema(prop as unknown as ObjectTypeSchema, defs);
     const leaf = prop as LeafProperty;
-    if (leaf.type === 'boolean') return false;
-    if (leaf.type === 'integer' || leaf.type === 'number') return 0;
-    if (leaf.type === 'string')
+    const pType = primaryType(leaf.type);
+    if (pType === 'boolean') return false;
+    if (pType === 'integer' || pType === 'number') return 0;
+    if (pType === 'string')
         return (leaf.format === 'date-time' || leaf.format === 'date') ? '2000-01-01T00:00:00Z' : '';
     return null;
 }

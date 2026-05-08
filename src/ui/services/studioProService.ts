@@ -166,26 +166,33 @@ function toModelName(raw: string): string {
     return startsWithLetter || 'Unnamed';
 }
 
+function primaryType(type: unknown): string | undefined {
+    if (Array.isArray(type)) return (type as string[]).find(t => t !== 'null');
+    return typeof type === 'string' ? type : undefined;
+}
+
 function getAttributeType(property: LeafProperty): MendixAttributeType {
-    if (property.type === 'string') {
+    const pType = primaryType(property.type);
+
+    if (pType === 'string') {
         if (property.format === 'date-time' || property.format === 'date') {
             return 'DateTime';
         }
         return 'String';
     }
 
-    if (property.type === 'boolean') {
+    if (pType === 'boolean') {
         return 'Boolean';
     }
 
-    if (property.type === 'integer') {
+    if (pType === 'integer') {
         if (property.format === 'int64' || property.format === 'long') {
             return 'Long';
         }
         return 'Integer';
     }
 
-    if (property.type === 'number') {
+    if (pType === 'number') {
         return 'Decimal';
     }
 
