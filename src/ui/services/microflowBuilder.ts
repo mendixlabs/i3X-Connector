@@ -21,7 +21,6 @@ export interface RestMicroflowOptions {
         entityVariableName: string;
     };
     annotationText?: string;
-    jsltHint?: string;
     returnMappedResult?: boolean;
 }
 
@@ -148,30 +147,6 @@ async function createMessageActivity(
     return messageActivity;
 }
 
-async function createLogMessageActivity(
-    sp: StudioProApi,
-    node: string,
-    level: Microflows.LogLevel,
-    messageText: string
-): Promise<Microflows.ActionActivity> {
-    const activity = (await sp.app.model.microflows.createElement(
-        'Microflows$ActionActivity'
-    )) as Microflows.ActionActivity;
-    const logAction = (await sp.app.model.microflows.createElement(
-        'Microflows$LogMessageAction'
-    )) as Microflows.LogMessageAction;
-    const template = (await sp.app.model.microflows.createElement(
-        'Microflows$StringTemplate'
-    )) as Microflows.StringTemplate;
-
-    template.text = messageText;
-    logAction.messageTemplate = template;
-    logAction.node = node;
-    logAction.level = level;
-    logAction.includeLatestStackTrace = false;
-    activity.action = logAction;
-    return activity;
-}
 
 /**
  * Populate a fresh microflow with the shared REST-call pattern used by both
@@ -372,7 +347,7 @@ export async function populateMicroflowWithRestCall(
 
         importActivity.action = importXmlAction;
         importActivity.size = { width: 120, height: 60 };
-        importActivity.relativeMiddlePoint = { x: options.jsltHint ? 960 : 760, y: 200 };
+        importActivity.relativeMiddlePoint = { x: 760, y: 200 };
         microflow.objectCollection.objects.push(importActivity);
         importActivityId = importActivity.$ID;
     }
@@ -400,7 +375,7 @@ export async function populateMicroflowWithRestCall(
             ? { returnValue: `$${importMappingOutput.outputVariableName}` }
             : {}
     );
-    endEvent.relativeMiddlePoint = { x: importActivityId ? (options.jsltHint ? 1160 : 1100) : 900, y: 200 };
+    endEvent.relativeMiddlePoint = { x: importActivityId ? 1100 : 900, y: 200 };
 
     if (returnMappedResult && importMappingOutput) {
         const returnDataType = (await sp.app.model.microflows.createElement(
@@ -419,36 +394,20 @@ export async function populateMicroflowWithRestCall(
 
     microflow.flows.push(await createSequenceFlow(sp, actionActivity.$ID, exclusiveSplit.$ID));
 
-    const successActivity = options.jsltHint
-        ? await createLogMessageActivity(sp, "'i3X Connector'", 'Warning', options.jsltHint)
-        : await createMessageActivity(
-            sp,
-            'Information',
-            shouldImportResponse
-                ? 'Successfully received and mapped response from i3X API.'
-                : 'Successfully received response from i3X API. Response: {1}',
-            shouldImportResponse ? [] : ['$ResponseBody'],
-            'en_US'
-        );
+    const successActivity = await createMessageActivity(
+        sp,
+        'Information',
+        shouldImportResponse
+            ? 'Successfully received and mapped response from i3X API.'
+            : 'Successfully received response from i3X API. Response: {1}',
+        shouldImportResponse ? [] : ['$ResponseBody'],
+        'en_US'
+    );
     successActivity.size = { width: 120, height: 60 };
-    successActivity.relativeMiddlePoint = { x: options.jsltHint ? 760 : importActivityId ? 960 : 800, y: 200 };
+    successActivity.relativeMiddlePoint = { x: importActivityId ? 960 : 800, y: 200 };
     microflow.objectCollection.objects.push(successActivity);
 
-    if (options.jsltHint) {
-        const annotation = await microflow.objectCollection.addAnnotation({
-            caption: options.jsltHint,
-            relativeMiddlePoint: { x: 620, y: 0 },
-            size: { width: 360, height: 130 },
-        });
-        microflow.flows.push(await createAnnotationFlow(sp, annotation.$ID, successActivity.$ID));
-    }
-
-    if (options.jsltHint && importActivityId) {
-        // Log message placeholder first (JSLT transform), then import mapping reads its output
-        microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, successActivity.$ID, true));
-        microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, importActivityId));
-        microflow.flows.push(await createSequenceFlow(sp, importActivityId, endEvent.$ID));
-    } else if (importActivityId) {
+    if (importActivityId) {
         microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, importActivityId, true));
         microflow.flows.push(await createSequenceFlow(sp, importActivityId, successActivity.$ID));
         microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, endEvent.$ID));
@@ -457,7 +416,7 @@ export async function populateMicroflowWithRestCall(
         microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, endEvent.$ID));
     }
 
-    const errorX = (importActivityId || options.jsltHint) ? 760 : 800;
+    const errorX = importActivityId ? 760 : 800;
     const errorActivity = await createMessageActivity(
         sp,
         'Error',
