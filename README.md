@@ -23,12 +23,6 @@ In App Explorer, right-click the **App** node and choose **Import Module Package
    - An objects list microflow for querying `/objects?typeElementId=...`
 4. Optionally, a separate "write values" microflow can be generated for pushing values back to i3X.
 
-## Generated microflow notes
-
-- Generated REST-call microflows now include a custom error branch that logs the HTTP status code, reason phrase, and response content to the `i3X` log node.
-- When the extension generates an objects list microflow, it opens that microflow in Studio Pro and warns you to change the REST call HTTP method to `GET` before using it.
-- The generated objects list microflow also includes an annotation in the flow canvas as a reminder about the required `GET` change.
-
 ## Requirements
 
 - Mendix Studio Pro 11.10 or later
