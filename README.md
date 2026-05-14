@@ -83,7 +83,3 @@ The extension supports three auth modes for the i3X API:
 - **None** — unauthenticated requests
 - **Basic** — username and password (sent as a Base64-encoded `Authorization` header)
 - **Token** — a custom header with an optional prefix (e.g. `Bearer`)
-
-## License
-
-MIT
