@@ -319,25 +319,29 @@ async function ensureFolder(parentId: string, name: string): Promise<{ $ID: stri
         ?? await sp.app.model.projects.addFolder(parentId, name);
 }
 
+function withSuffix(name: string, suffix: string): string {
+    return suffix ? `${name}_${suffix}` : name;
+}
+
 async function ensureEndpointConstants(connection: ConnectionConfig): Promise<EndpointSetup> {
     const normalizedBaseUrl = getApiBaseUrl(connection.apiBaseUrl);
     if (!normalizedBaseUrl) {
         throw new Error(`Cannot build base API URL from '${connection.apiBaseUrl}'.`);
     }
 
-    const sp = getStudioPro();
     const module = await getRequiredProjectModule();
+
+    if (!connection.multiServerMode) {
+        return ensureEndpointConstantsSingle(connection, normalizedBaseUrl, module.$ID);
+    }
+
+    const sp = getStudioPro();
     const folderName = deriveEndpointFolderName(normalizedBaseUrl);
     const endpointFolder = await ensureFolder(module.$ID, folderName);
     const endpointFolderId = endpointFolder.$ID;
 
     const baseUrlConstantName = `API_BaseUrl_${folderName}`;
-    const existingNames = new Set(
-        (await sp.app.model.constants.getUnitsInfo())
-            .filter(u => u.moduleName === IMPLEMENTATION_MODULE)
-            .map(u => u.name)
-            .filter((n): n is string => n !== undefined)
-    );
+    const existingNames = await getExistingConstantNames(sp);
 
     if (!existingNames.has(baseUrlConstantName)) {
         const configFolder = await ensureFolder(endpointFolderId, 'Configuration');
@@ -350,14 +354,47 @@ async function ensureEndpointConstants(connection: ConnectionConfig): Promise<En
     }
 
     const baseUrlConstantRef = `@${IMPLEMENTATION_MODULE}.${baseUrlConstantName}`;
-    const authRefs = await ensureAuthConstantsForEndpoint(connection.auth, folderName, endpointFolderId, existingNames);
+    const authRefs = await ensureAuthConstants(connection.auth, folderName, endpointFolderId, existingNames);
     return { baseUrlConstantRef, authRefs, endpointFolderId };
 }
 
-async function ensureAuthConstantsForEndpoint(
+async function ensureEndpointConstantsSingle(
+    connection: ConnectionConfig,
+    normalizedBaseUrl: string,
+    moduleId: string
+): Promise<EndpointSetup> {
+    const sp = getStudioPro();
+    const existingNames = await getExistingConstantNames(sp);
+
+    const baseUrlConstantName = 'API_BaseUrl';
+    if (!existingNames.has(baseUrlConstantName)) {
+        const configFolder = await ensureFolder(moduleId, 'Configuration');
+        await sp.app.model.constants.addConstant(configFolder.$ID, {
+            name: baseUrlConstantName,
+            type: 'String',
+            defaultValue: normalizedBaseUrl,
+            exposedToClient: false,
+        });
+    }
+
+    const baseUrlConstantRef = `@${IMPLEMENTATION_MODULE}.${baseUrlConstantName}`;
+    const authRefs = await ensureAuthConstants(connection.auth, '', moduleId, existingNames);
+    return { baseUrlConstantRef, authRefs, endpointFolderId: moduleId };
+}
+
+async function getExistingConstantNames(sp: ReturnType<typeof getStudioPro>): Promise<Set<string>> {
+    return new Set(
+        (await sp.app.model.constants.getUnitsInfo())
+            .filter(u => u.moduleName === IMPLEMENTATION_MODULE)
+            .map(u => u.name)
+            .filter((n): n is string => n !== undefined)
+    );
+}
+
+async function ensureAuthConstants(
     auth: AuthConfig,
-    folderName: string,
-    endpointFolderId: string,
+    suffix: string,
+    containerFolderId: string,
     existingNames: Set<string>
 ): Promise<AuthConstantRefs> {
     if (auth.mode === 'none') return { mode: 'none' };
@@ -365,14 +402,14 @@ async function ensureAuthConstantsForEndpoint(
     const sp = getStudioPro();
 
     if (auth.mode === 'basic') {
-        const usernameName = `API_Username_${folderName}`;
-        const passwordName = `API_Password_${folderName}`;
+        const usernameName = withSuffix('API_Username', suffix);
+        const passwordName = withSuffix('API_Password', suffix);
         const toCreate: { name: string; value: string }[] = [];
         if (!existingNames.has(usernameName)) toCreate.push({ name: usernameName, value: auth.username });
         if (!existingNames.has(passwordName)) toCreate.push({ name: passwordName, value: auth.password });
 
         if (toCreate.length > 0) {
-            const configFolder = await ensureFolder(endpointFolderId, 'Configuration');
+            const configFolder = await ensureFolder(containerFolderId, 'Configuration');
             const constantNames = toCreate.map(c => `• ${IMPLEMENTATION_MODULE}.${c.name}`).join('\n');
             const prefill = await sp.ui.messageBoxes.ask({
                 type: 'confirmation',
@@ -392,9 +429,9 @@ async function ensureAuthConstantsForEndpoint(
     }
 
     // token mode
-    const tokenName = `API_Token_${folderName}`;
+    const tokenName = withSuffix('API_Token', suffix);
     if (!existingNames.has(tokenName)) {
-        const configFolder = await ensureFolder(endpointFolderId, 'Configuration');
+        const configFolder = await ensureFolder(containerFolderId, 'Configuration');
         const prefill = await sp.ui.messageBoxes.ask({
             type: 'confirmation',
             question: `The Constant '${IMPLEMENTATION_MODULE}.${tokenName}' will be created to store the authentication token.\n\nPrefill with the token you entered?`,

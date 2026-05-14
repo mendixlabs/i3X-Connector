@@ -195,6 +195,144 @@
     color: var(--text-body);
 }
 
+.multiServerRow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 10px;
+}
+
+.multiServerLabel {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 8px 4px 6px;
+    border-radius: var(--radius-md);
+    font-size: 12.5px;
+    color: var(--text-body);
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--transition), color var(--transition);
+}
+
+.multiServerLabel:hover {
+    background: var(--bg-row-hover);
+}
+
+.multiServerLabel input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    flex-shrink: 0;
+    cursor: pointer;
+    accent-color: var(--primary);
+}
+
+.multiServerLabel input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+}
+
+.multiServerInfoWrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.multiServerInfoIcon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-faint);
+    font-size: 9.5px;
+    font-weight: 700;
+    font-family: inherit;
+    line-height: 1;
+    color: var(--text-faint);
+    cursor: default;
+    flex-shrink: 0;
+    transition: border-color var(--transition), color var(--transition);
+}
+
+.multiServerInfoWrap:hover .multiServerInfoIcon {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.multiServerTooltip {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 260px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    padding: 10px 12px;
+    z-index: 50;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.multiServerInfoWrap:hover .multiServerTooltip {
+    opacity: 1;
+    visibility: visible;
+}
+
+.multiServerTooltip::before {
+    content: '';
+    position: absolute;
+    top: -7px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 7px solid var(--border);
+}
+
+.multiServerTooltip::after {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 6px solid var(--bg-card);
+}
+
+.tooltipPara {
+    margin: 0;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--text-body);
+}
+
+.tooltipPara + .tooltipPara {
+    margin-top: 7px;
+    padding-top: 7px;
+    border-top: 1px solid var(--border);
+}
+
+.tooltipCode {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 10.5px;
+    background: var(--bg-header);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 3px;
+    color: var(--text-body);
+}
+
 .authCard {
     margin-top: 12px;
     padding: 12px;

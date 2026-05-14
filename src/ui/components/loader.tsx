@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { getStudioProApi } from '@mendix/extensions-api';
+import React, { useState, useEffect } from 'react';
+import { getStudioProApi, type Constants } from '@mendix/extensions-api';
 import styles from '../index.module.css';
 import { LoaderProps } from '../types';
 import { getObjectTypesUrl, unwrapI3xResult } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
+import { IMPLEMENTATION_MODULE } from '../types/connection';
 
 const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) => {
     const studioPro = getStudioProApi(context);
@@ -17,6 +18,52 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
     const [tokenHeaderMode, setTokenHeaderMode] = useState<'bearer' | 'custom'>('bearer');
     const [customHeaderName, setCustomHeaderName] = useState('x-api-key');
     const [customPrefix, setCustomPrefix] = useState('');
+    const [multiServerMode, setMultiServerMode] = useState(false);
+
+    useEffect(() => {
+        const preloadFromConstants = async () => {
+            try {
+                const units = await studioPro.app.model.constants.getUnitsInfo();
+                const mine = units.filter(u => u.moduleName === IMPLEMENTATION_MODULE);
+
+                const baseUrlUnit = mine.find(u => u.name === 'API_BaseUrl');
+                if (!baseUrlUnit) return;
+
+                const baseUrlConstant = await studioPro.app.model.constants.load<Constants.Constant>(
+                    'Constants$Constant', baseUrlUnit.$ID
+                );
+                if (!baseUrlConstant?.defaultValue) return;
+
+                setUrl(baseUrlConstant.defaultValue);
+
+                const usernameUnit = mine.find(u => u.name === 'API_Username');
+                const passwordUnit = mine.find(u => u.name === 'API_Password');
+                if (usernameUnit && passwordUnit) {
+                    const [uc, pc] = await Promise.all([
+                        studioPro.app.model.constants.load<Constants.Constant>('Constants$Constant', usernameUnit.$ID),
+                        studioPro.app.model.constants.load<Constants.Constant>('Constants$Constant', passwordUnit.$ID),
+                    ]);
+                    setAuthMode('basic');
+                    setUsername(uc?.defaultValue ?? '');
+                    setPassword(pc?.defaultValue ?? '');
+                    return;
+                }
+
+                const tokenUnit = mine.find(u => u.name === 'API_Token');
+                if (tokenUnit) {
+                    const tc = await studioPro.app.model.constants.load<Constants.Constant>('Constants$Constant', tokenUnit.$ID);
+                    if (tc?.defaultValue) {
+                        setAuthMode('token');
+                        setToken(tc.defaultValue);
+                        setTokenHeaderMode('bearer');
+                    }
+                }
+            } catch {
+                // silently skip preload if model access fails
+            }
+        };
+        preloadFromConstants();
+    }, []);
 
     const resolveAuth = () => {
         if (authMode === 'none') {
@@ -76,6 +123,7 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
             setConnection({
                 apiBaseUrl: url.trim(),
                 auth,
+                multiServerMode,
             });
             setApiData(data);
         } catch (error) {
@@ -105,6 +153,29 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
                 <button className={styles.loaderButton} onClick={handleLoad} disabled={loading}>
                     {loading ? 'Loading…' : 'Load'}
                 </button>
+            </div>
+
+            <div className={styles.multiServerRow}>
+                <label className={styles.multiServerLabel}>
+                    <input
+                        type="checkbox"
+                        checked={multiServerMode}
+                        onChange={(e) => setMultiServerMode(e.target.checked)}
+                        disabled={loading}
+                    />
+                    <span>Multiple servers</span>
+                </label>
+                <div className={styles.multiServerInfoWrap}>
+                    <span className={styles.multiServerInfoIcon}>?</span>
+                    <div className={styles.multiServerTooltip}>
+                        <p className={styles.tooltipPara}>
+                            <strong>Off (default):</strong> Artifacts go directly in <code className={styles.tooltipCode}>i3X_Implementation</code> with simple constant names: <code className={styles.tooltipCode}>API_BaseUrl</code>, <code className={styles.tooltipCode}>API_Token</code>, etc. Saved values are preloaded when the extension opens.
+                        </p>
+                        <p className={styles.tooltipPara}>
+                            <strong>On:</strong> Each endpoint gets its own subfolder and constants are suffixed with the server name, e.g. <code className={styles.tooltipCode}>API_BaseUrl_api_example_com</code>. Use this when connecting to multiple i3X endpoints in the same Mendix project.
+                        </p>
+                    </div>
+                </div>
             </div>
 
             <div className={styles.authCard}>

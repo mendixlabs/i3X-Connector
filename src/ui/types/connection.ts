@@ -8,4 +8,5 @@ export type AuthConfig =
 export interface ConnectionConfig {
     apiBaseUrl: string;
     auth: AuthConfig;
+    multiServerMode: boolean;
 }
