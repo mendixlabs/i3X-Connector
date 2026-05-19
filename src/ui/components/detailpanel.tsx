@@ -1,14 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ComponentContext, getStudioProApi } from '@mendix/extensions-api';
 import styles from '../index.module.css';
-import { ObjectType, AnyProperty, LeafProperty, ConnectionConfig, isGroupProperty, isArrayProperty, extractArrayItemProperties } from '../types';
+import { ObjectType, AnyProperty, ConnectionConfig, isGroupProperty, isArrayProperty, extractArrayItemProperties, shortNs } from '../types';
 import { createQueryValuesMicroflow, createHistoryMicroflow, createWriteMicroflow, checkValueQueryEntitiesExist, summarizeArtifactResult, MENDIX_LONG_MAX } from '../services/studioProService';
 import { getObjectsUrl, unwrapI3xResult } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
-
-function shortNs(uri: string): string {
-    return uri.split('/').filter(Boolean).pop() ?? uri;
-}
 
 interface Props {
     context: ComponentContext;
@@ -118,7 +114,7 @@ const ArraySection: React.FC<{ name: string; prop: AnyProperty; isRequired: bool
             if (typeof c.$ref === 'string') {
                 const resolved = resolveRef(c.$ref);
                 if (resolved?.schema.properties) {
-                    itemProps = resolved.schema.properties as Record<string, LeafProperty>;
+                    itemProps = resolved.schema.properties as Record<string, AnyProperty>;
                     break;
                 }
             }
@@ -212,7 +208,7 @@ const GroupSection: React.FC<{
         if (resolved) {
             const resolvedProp: AnyProperty = {
                 type: 'object',
-                properties: (resolved.schema.properties ?? {}) as Record<string, LeafProperty>,
+                properties: (resolved.schema.properties ?? {}) as Record<string, AnyProperty>,
                 required: resolved.schema.required,
             };
             return <GroupSection name={name} prop={resolvedProp} topRequired={topRequired} depth={depth} resolveRef={resolveRef} resolveComponentType={resolveComponentType} onNavigate={onNavigate} />;
@@ -406,7 +402,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 const raw = await response.json();
                 const unwrappedObjects = unwrapI3xResult<unknown[]>(raw);
                 const objects = Array.isArray(unwrappedObjects)
-                    ? unwrappedObjects ?? []
+                    ? unwrappedObjects
                     : [];
                 if (!cancelled) {
                     setRetrievedObjects(objects);
@@ -441,8 +437,9 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                     setWriteEntitiesExist(exists);
                 }
             })
-            .catch(() => {
+            .catch((error: unknown) => {
                 if (!cancelled) {
+                    console.error('checkValueQueryEntitiesExist failed:', error instanceof Error ? error.message : String(error));
                     setWriteEntitiesExist(false);
                 }
             });
@@ -544,6 +541,11 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
         }
     };
 
+    const noObjects = !isLoadingObjects && retrievedObjects.length === 0;
+    const btnClass = noObjects
+        ? `${styles.actionButton} ${styles.actionButtonWarning}`
+        : styles.actionButton;
+
     return (
         <div className={styles.detailPanel}>
             {/* Header */}
@@ -554,37 +556,31 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 </div>
                 <div className={styles.detailHeaderActions}>
                     <span className={styles.detailHeaderActionsLabel}>Create for this ObjectType:</span>
-                    {(() => {
-                        const noObjects = !isLoadingObjects && retrievedObjects.length === 0;
-                        const btnClass = noObjects
-                            ? `${styles.actionButton} ${styles.actionButtonWarning}`
-                            : styles.actionButton;
-                        return (<>
-                            <button
-                                className={btnClass}
-                                onClick={handleCreateValueQuery}
-                                disabled={isLoadingObjects || isCreatingQuery}
-                            >
-                                {isCreatingQuery ? 'Creating...' : 'Latest Values'}
-                            </button>
-                            <button
-                                className={btnClass}
-                                onClick={handleCreateHistoryMicroflow}
-                                disabled={!writeEntitiesExist || isCreatingHistory}
-                                title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
-                            >
-                                {isCreatingHistory ? 'Creating...' : 'History'}
-                            </button>
-                            <button
-                                className={btnClass}
-                                onClick={handleCreateWriteMicroflow}
-                                disabled={!writeEntitiesExist || isCreatingWrite}
-                                title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
-                            >
-                                {isCreatingWrite ? 'Creating...' : 'Writeback'}
-                            </button>
-                        </>);
-                    })()}
+                    <>
+                        <button
+                            className={btnClass}
+                            onClick={handleCreateValueQuery}
+                            disabled={isLoadingObjects || isCreatingQuery}
+                        >
+                            {isCreatingQuery ? 'Creating...' : 'Latest Values'}
+                        </button>
+                        <button
+                            className={btnClass}
+                            onClick={handleCreateHistoryMicroflow}
+                            disabled={!writeEntitiesExist || isCreatingHistory}
+                            title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
+                        >
+                            {isCreatingHistory ? 'Creating...' : 'History'}
+                        </button>
+                        <button
+                            className={btnClass}
+                            onClick={handleCreateWriteMicroflow}
+                            disabled={!writeEntitiesExist || isCreatingWrite}
+                            title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
+                        >
+                            {isCreatingWrite ? 'Creating...' : 'Writeback'}
+                        </button>
+                    </>
                     <button className={styles.closeButton} onClick={onClose} title="Close">✕</button>
                 </div>
             </div>

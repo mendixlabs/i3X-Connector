@@ -10,7 +10,7 @@ export interface LeafProperty {
 
 export interface GroupProperty {
     type: 'object';
-    properties: Record<string, LeafProperty>;
+    properties: Record<string, AnyProperty>;
     required?: string[];
     additionalProperties?: boolean;
     $defs?: Record<string, unknown>;
@@ -56,13 +56,13 @@ export function isArrayProperty(p: AnyProperty): p is ArrayProperty {
  */
 export function extractArrayItemProperties(
     prop: ArrayProperty
-): Record<string, LeafProperty> | null {
+): Record<string, AnyProperty> | null {
     const items = prop.items as Record<string, unknown> | undefined;
     if (!items) return null;
 
     // Direct object: items: { type: 'object', properties: {...} }
     if (items.type === 'object' && items.properties && typeof items.properties === 'object') {
-        return items.properties as Record<string, LeafProperty>;
+        return items.properties as Record<string, AnyProperty>;
     }
 
     // anyOf: items: { anyOf: [...] } — take the first entry that is a plain object schema
@@ -70,12 +70,16 @@ export function extractArrayItemProperties(
         for (const candidate of items.anyOf as unknown[]) {
             const c = candidate as Record<string, unknown>;
             if (c.type === 'object' && c.properties && typeof c.properties === 'object') {
-                return c.properties as Record<string, LeafProperty>;
+                return c.properties as Record<string, AnyProperty>;
             }
         }
     }
 
     return null;
+}
+
+export function shortNs(uri: string): string {
+    return uri.split('/').filter(Boolean).pop() ?? uri;
 }
 
 export function isObjectTypeArray(value: unknown): value is ObjectType[] {

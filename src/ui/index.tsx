@@ -4,8 +4,8 @@ import { IComponent, getStudioProApi } from "@mendix/extensions-api";
 import { Loader, List, DetailPanel } from "./components/_components";
 import { createObjectsListMicroflow, initStudioPro, summarizeArtifactResult } from "./services/studioProService";
 import { ConnectionConfig, ObjectType, isObjectTypeArray } from "./types";
+import { IMPLEMENTATION_MODULE } from "./constants";
 import styles from "./index.module.css";
-import "./index.module.css";
 
 export const component: IComponent = {
     async loaded(componentContext) {
@@ -79,7 +79,7 @@ export const component: IComponent = {
                         await studioPro.ui.messageBoxes.show(
                             "info",
                             "Objects List already exists",
-                            `Entity '${result.baseEntityName}', JSON Structure '${result.jsonStructureName}', Import Mapping '${result.importMappingName}', and microflow '${result.microflowName}' already exist in module 'i3X_Implementation'.`
+                            `Entity '${result.baseEntityName}', JSON Structure '${result.jsonStructureName}', Import Mapping '${result.importMappingName}', and microflow '${result.microflowName}' already exist in module '${IMPLEMENTATION_MODULE}'.`
                         );
                     }
                 } catch (error) {

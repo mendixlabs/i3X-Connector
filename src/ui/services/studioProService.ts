@@ -1,6 +1,16 @@
 import type { DomainModels, Mappings, Projects, StudioProApi } from '@mendix/extensions-api';
 import {
     IMPLEMENTATION_MODULE,
+    CONSTANT_API_BASE_URL,
+    CONSTANT_API_USERNAME,
+    CONSTANT_API_PASSWORD,
+    CONSTANT_API_TOKEN,
+    DECIMAL_WRITE_MARKER,
+    DECIMAL_INTEGER_MARKER,
+    OBJECT_PATH,
+    JSON_EXTRA_HEADERS,
+} from '../constants';
+import {
     isArrayProperty,
     isGroupProperty,
     extractArrayItemProperties,
@@ -106,7 +116,6 @@ interface ValueQueryArtifactsResult extends DomainModelResult {
 
 
 type MendixAttributeType = NonNullable<DomainModels.AttributeCreationOptions['type']>;
-const MENDIX_LONG_MIN = Number('-9223372036854775808');
 export const MENDIX_LONG_MAX = Number('9223372036854775807');
 
 // ── Layout constants ──────────────────────────────────────────────────────────
@@ -119,10 +128,6 @@ function entityHeight(attrCount: number): number {
     return ENTITY_HDR_H + Math.max(1, attrCount) * ATTR_ROW_H;
 }
 
-function buildObjectsEndpoint(typeId: string): string {
-    return `/objects?${new URLSearchParams({ typeElementId: typeId }).toString()}`;
-}
-
 function buildRestLocationTemplate(
     endpointTemplate: string,
     baseUrlRef: string,
@@ -132,33 +137,6 @@ function buildRestLocationTemplate(
         text: `{1}${endpointTemplate}`,
         args: [baseUrlRef, ...argExpressions],
     };
-}
-
-function clampToMendixLong(value: number): number {
-    if (!Number.isFinite(value)) return value;
-    if (value < MENDIX_LONG_MIN) return MENDIX_LONG_MIN;
-    if (value > MENDIX_LONG_MAX) return MENDIX_LONG_MAX;
-    return value;
-}
-
-function sanitizeJsonForMendixLimits(value: unknown, parentKey?: string): unknown {
-    if (Array.isArray(value)) {
-        return value.map(item => sanitizeJsonForMendixLimits(item));
-    }
-
-    if (value !== null && typeof value === 'object') {
-        const sanitized: Record<string, unknown> = {};
-        for (const [key, childValue] of Object.entries(value)) {
-            sanitized[key] = sanitizeJsonForMendixLimits(childValue, key);
-        }
-        return sanitized;
-    }
-
-    if (typeof value === 'number' && (parentKey === 'minimum' || parentKey === 'maximum')) {
-        return clampToMendixLong(value);
-    }
-
-    return value;
 }
 
 function toModelName(raw: string): string {
@@ -287,6 +265,14 @@ async function getRequiredProjectModule(): Promise<Readonly<Projects.Module>> {
     return (await sp.app.model.modules.getModule(IMPLEMENTATION_MODULE)) ?? sp.app.model.modules.addModule(IMPLEMENTATION_MODULE);
 }
 
+async function getDomainModelOrThrow(): Promise<DomainModels.DomainModel> {
+    const sp = getStudioPro();
+    const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
+    if (!domainModel) {
+        throw new Error(`Module '${IMPLEMENTATION_MODULE}' was not found or has no domain model.`);
+    }
+    return domainModel;
+}
 
 // ── Endpoint folder / constant helpers ───────────────────────────────────────
 
@@ -366,7 +352,7 @@ async function ensureEndpointConstantsSingle(
     const sp = getStudioPro();
     const existingNames = await getExistingConstantNames(sp);
 
-    const baseUrlConstantName = 'API_BaseUrl';
+    const baseUrlConstantName = CONSTANT_API_BASE_URL;
     if (!existingNames.has(baseUrlConstantName)) {
         const configFolder = await ensureFolder(moduleId, 'Configuration');
         await sp.app.model.constants.addConstant(configFolder.$ID, {
@@ -402,8 +388,8 @@ async function ensureAuthConstants(
     const sp = getStudioPro();
 
     if (auth.mode === 'basic') {
-        const usernameName = withSuffix('API_Username', suffix);
-        const passwordName = withSuffix('API_Password', suffix);
+        const usernameName = withSuffix(CONSTANT_API_USERNAME, suffix);
+        const passwordName = withSuffix(CONSTANT_API_PASSWORD, suffix);
         const toCreate: { name: string; value: string }[] = [];
         if (!existingNames.has(usernameName)) toCreate.push({ name: usernameName, value: auth.username });
         if (!existingNames.has(passwordName)) toCreate.push({ name: passwordName, value: auth.password });
@@ -429,7 +415,7 @@ async function ensureAuthConstants(
     }
 
     // token mode
-    const tokenName = withSuffix('API_Token', suffix);
+    const tokenName = withSuffix(CONSTANT_API_TOKEN, suffix);
     if (!existingNames.has(tokenName)) {
         const configFolder = await ensureFolder(containerFolderId, 'Configuration');
         const prefill = await sp.ui.messageBoxes.ask({
@@ -539,10 +525,7 @@ async function buildDomainModelEntities(selectedObject: ObjectType): Promise<Dom
         throw new Error('Selected object has no valid name.');
     }
 
-    const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
-    if (!domainModel) {
-        throw new Error(`Module '${IMPLEMENTATION_MODULE}' was not found or has no domain model.`);
-    }
+    const domainModel = await getDomainModelOrThrow();
 
     const allProperties = selectedObject.schema.properties ?? {};
     const groupEntryList = Object.entries(allProperties).filter(([, p]) => getChildPropertiesIfAny(p) !== null);
@@ -613,10 +596,7 @@ async function buildDomainModelEntities(selectedObject: ObjectType): Promise<Dom
 
 async function ensureObjectListEntity(): Promise<DomainModelResult> {
     const sp = getStudioPro();
-    const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
-    if (!domainModel) {
-        throw new Error(`Module '${IMPLEMENTATION_MODULE}' was not found or has no domain model.`);
-    }
+    const domainModel = await getDomainModelOrThrow();
 
     const startY = computeEntityStartY(domainModel);
     const entityInfo = await ensureEntity(domainModel, OBJECT_LIST_ENTITY_NAME);
@@ -644,10 +624,7 @@ async function ensureObjectListEntity(): Promise<DomainModelResult> {
 
 async function ensureDateTimeAttribute(entityName: string, attributeName: string): Promise<void> {
     const sp = getStudioPro();
-    const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
-    if (!domainModel) {
-        throw new Error(`Module '${IMPLEMENTATION_MODULE}' was not found or has no domain model.`);
-    }
+    const domainModel = await getDomainModelOrThrow();
 
     const entity = domainModel.getEntity(entityName);
     const attribute = entity?.getAttribute(attributeName);
@@ -704,6 +681,17 @@ function buildGenericObjectListSnippet(): string {
         ],
     }, null, 2);
 }
+
+// Paths in the v1 /objects/value envelope that sit above the actual value payload.
+// Array items use |(Object)| as a path segment, as confirmed by jsonStructures.getElements().
+const VALUE_RESPONSE_PATH = `${OBJECT_PATH}|results|${OBJECT_PATH}|result|value`;
+const VALUE_RESULT_PATH = `${OBJECT_PATH}|results|${OBJECT_PATH}|result`;
+const VALUE_ENVELOPE_SELECTION_PATHS: string[] = [];
+const WRITE_VALUE_OBJECT_PATH = `${OBJECT_PATH}|value`;
+
+// Paths in the official /objects/history response.
+const HISTORY_VALUE_PATH = `${OBJECT_PATH}|results|${OBJECT_PATH}|result|values|${OBJECT_PATH}`;
+const HISTORY_ENVELOPE_SELECTION_PATHS: string[] = [];
 
 async function createValueQueryArtifacts(
     objectType: ObjectType,
@@ -811,7 +799,7 @@ async function createOrUpdateObjectListImportMapping(
     ]);
 
     const hydratedMapping = (await sp.app.model.importMappings.loadAll(u => u.$ID === mapping.$ID))[0] ?? mapping;
-    fixImportMappingElements(hydratedMapping.rootMappingElements, null);
+    fixMappingElements(hydratedMapping.rootMappingElements, null, 'Create');
     await sp.app.model.importMappings.save(hydratedMapping);
 
     return { created: !existingInfo, mappingId: mapping.$ID };
@@ -869,10 +857,7 @@ export async function createQueryValuesMicroflow(
         urlArgs: locationTemplate.args,
         requestBody: requestBody.text,
         requestBodyArgs: requestBody.args,
-        extraHeaders: [
-            { key: 'Accept', value: `'application/json'` },
-            { key: 'Content-Type', value: `'application/json'` },
-        ],
+        extraHeaders: JSON_EXTRA_HEADERS,
         authRefs,
         importMappingQualifiedName: `${IMPLEMENTATION_MODULE}.IM_${objectTypeName}`,
         importMappingOutput: {
@@ -907,10 +892,9 @@ export async function createHistoryMicroflow(
     const sp = getStudioPro();
     const { baseUrlConstantRef, authRefs, endpointFolderId } = await ensureEndpointConstants(connection);
 
-    const typeName = toModelName(objectType.displayName);
     const baseEntityName = toModelName(objectType.displayName);
     const historyEntityName = `${baseEntityName}_History`;
-    const microflowName = `MF_${typeName}_History`;
+    const microflowName = `MF_${baseEntityName}_History`;
     const jsonStructureName = `JSON_History_${baseEntityName}`;
     const importMappingName = `IM_History_${baseEntityName}`;
 
@@ -999,10 +983,7 @@ export async function createHistoryMicroflow(
         urlArgs: locationTemplate.args,
         requestBody: bodyText,
         requestBodyArgs: bodyArgs,
-        extraHeaders: [
-            { key: 'Accept', value: `'application/json'` },
-            { key: 'Content-Type', value: `'application/json'` },
-        ],
+        extraHeaders: JSON_EXTRA_HEADERS,
         authRefs,
         importMappingQualifiedName: `${IMPLEMENTATION_MODULE}.${importMappingName}`,
         importMappingOutput: {
@@ -1049,7 +1030,7 @@ function buildWriteRequestPayload(valuePayload: unknown): {
     return {
         requestBody: { value: valuePayload },
         mappingPayload: { value: valuePayload },
-        entityPath: '(Object)',
+        entityPath: OBJECT_PATH,
     };
 }
 
@@ -1084,7 +1065,6 @@ function buildSchemaAwareWriteSnippet(
     valueSchema: ObjectTypeSchema
 ): string {
     const defs = (valueSchema.$defs ?? {}) as Record<string, unknown>;
-    const decimalMarker = '__I3X_DECIMAL_WRITE__';
 
     function tagValues(value: unknown, props: Record<string, AnyProperty> | null): unknown {
         if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -1115,7 +1095,7 @@ function buildSchemaAwareWriteSnippet(
                 if (typeof childValue === 'number' && Number.isFinite(childValue) && Number.isInteger(childValue)) {
                     const leafType = (propSchema as LeafProperty | undefined)?.type;
                     if (leafType !== 'integer') {
-                        return [key, `${decimalMarker}${childValue.toFixed(1)}`];
+                        return [key, `${DECIMAL_WRITE_MARKER}${childValue.toFixed(1)}`];
                     }
                 }
 
@@ -1130,18 +1110,17 @@ function buildSchemaAwareWriteSnippet(
 
     const json = JSON.stringify(tagged, null, 2);
     return json.replace(
-        new RegExp(`"${decimalMarker}(-?(?:0|[1-9]\\d*)\\.0)"`, 'g'),
+        new RegExp(`"${DECIMAL_WRITE_MARKER}(-?(?:0|[1-9]\\d*)\\.0)"`, 'g'),
         '$1'
     );
 }
 
 function stringifyJsonWithDecimalIntegers(value: unknown): string {
-    const decimalIntegerMarker = '__I3X_DECIMAL_INTEGER__';
     const json = JSON.stringify(
         value,
         (_key, currentValue) => {
             if (typeof currentValue === 'number' && Number.isFinite(currentValue) && Number.isInteger(currentValue)) {
-                return `${decimalIntegerMarker}${currentValue.toFixed(1)}`;
+                return `${DECIMAL_INTEGER_MARKER}${currentValue.toFixed(1)}`;
             }
 
             return currentValue;
@@ -1150,17 +1129,18 @@ function stringifyJsonWithDecimalIntegers(value: unknown): string {
     );
 
     return json.replace(
-        new RegExp(`"${decimalIntegerMarker}(-?(?:0|[1-9]\\d*)\\.0)"`, 'g'),
+        new RegExp(`"${DECIMAL_INTEGER_MARKER}(-?(?:0|[1-9]\\d*)\\.0)"`, 'g'),
         '$1'
     );
 }
 
-function fixExportMappingElements(
+function fixMappingElements(
     elements: Mappings.ObjectMappingElement[],
-    parentEntityQualifiedName: string | null
+    parentEntityQualifiedName: string | null,
+    objectHandling: 'Create' | 'Parameter' | 'Find'
 ): void {
     for (const el of elements) {
-        el.objectHandling = parentEntityQualifiedName === null ? 'Parameter' : 'Find';
+        el.objectHandling = objectHandling;
 
         if (parentEntityQualifiedName !== null && el.entity) {
             const parentEntityName = parentEntityQualifiedName.split('.').pop() ?? '';
@@ -1170,19 +1150,22 @@ function fixExportMappingElements(
             el.association = null;
         }
 
-        fixExportMappingElements(
+        fixMappingElements(
             el.children.filter((c): c is Mappings.ObjectMappingElement => 'children' in c),
-            el.entity
+            el.entity,
+            objectHandling === 'Parameter' ? 'Find' : objectHandling
         );
     }
 }
 
-// Build the selection paths and MapObject list for an export mapping from a parsed
-// JSON value object, deriving entity names from the same convention as the value-query flow.
-function buildExportMappingEntries(
+// Build the selection paths and MapObject list for a mapping from a parsed JSON value object.
+// Pass includeArrayWrapperPaths=true for export mappings (which need the array wrapper element
+// selected), false for import mappings (the |(Object)| item path is sufficient).
+function buildMappingEntries(
     value: unknown,
     path: string,
-    entityName: string
+    entityName: string,
+    includeArrayWrapperPaths: boolean
 ): { selectionPaths: string[]; mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[] } {
     const selectionPaths: string[] = [path];
     const mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[] = [];
@@ -1198,8 +1181,10 @@ function buildExportMappingEntries(
         if (Array.isArray(childValue)) {
             const mergedItem = mergeArrayObjectItems(childValue);
             if (mergedItem !== null) {
-                selectionPaths.push(`${path}|${key}`);
-                const child = buildExportMappingEntries(mergedItem, `${path}|${key}|(Object)`, `${entityName}_${toModelName(key)}`);
+                if (includeArrayWrapperPaths) {
+                    selectionPaths.push(`${path}|${key}`);
+                }
+                const child = buildMappingEntries(mergedItem, `${path}|${key}|${OBJECT_PATH}`, `${entityName}_${toModelName(key)}`, includeArrayWrapperPaths);
                 selectionPaths.push(...child.selectionPaths);
                 mapObjects.push(...child.mapObjects);
             }
@@ -1208,10 +1193,11 @@ function buildExportMappingEntries(
 
         selectionPaths.push(`${path}|${key}`);
         if (childValue !== null && typeof childValue === 'object') {
-            const child = buildExportMappingEntries(
+            const child = buildMappingEntries(
                 childValue,
                 `${path}|${key}`,
-                `${entityName}_${toModelName(key)}`
+                `${entityName}_${toModelName(key)}`,
+                includeArrayWrapperPaths
             );
             selectionPaths.push(...child.selectionPaths.slice(1));
             mapObjects.push(...child.mapObjects);
@@ -1239,7 +1225,7 @@ async function createOrUpdateExportMapping(
         u => u.moduleName === IMPLEMENTATION_MODULE && u.name === mappingName
     );
 
-    const { selectionPaths, mapObjects } = buildExportMappingEntries(parsedWriteValue, entityPath, baseEntityName);
+    const { selectionPaths, mapObjects } = buildMappingEntries(parsedWriteValue, entityPath, baseEntityName, true);
 
     // Export mappings require the document root '(Object)' to be selected for any child
     // elements to be usable. Import mappings navigate inward from a deep path and don't
@@ -1270,22 +1256,11 @@ async function createOrUpdateExportMapping(
 
     const hydratedMapping = (await sp.app.model.exportMappings.loadAll(u => u.$ID === mapping.$ID))[0] ?? mapping;
     hydratedMapping.parameterName = entityVariableName;
-    fixExportMappingElements(hydratedMapping.rootMappingElements, null);
+    fixMappingElements(hydratedMapping.rootMappingElements, null, 'Parameter');
     await sp.app.model.exportMappings.save(hydratedMapping);
 
     return { created: !existingInfo, mappingId: mapping.$ID };
 }
-
-// Paths in the v1 /objects/value envelope that sit above the actual value payload.
-// Array items use |(Object)| as a path segment, as confirmed by jsonStructures.getElements().
-const VALUE_RESPONSE_PATH = '(Object)|results|(Object)|result|value';
-const VALUE_RESULT_PATH = '(Object)|results|(Object)|result';
-const VALUE_ENVELOPE_SELECTION_PATHS: string[] = [];
-const WRITE_VALUE_OBJECT_PATH = '(Object)|value';
-
-// Paths in the official /objects/history response.
-const HISTORY_VALUE_PATH = '(Object)|results|(Object)|result|values|(Object)';
-const HISTORY_ENVELOPE_SELECTION_PATHS: string[] = [];
 
 function getValueQueryImportEntityPath(raw: unknown): string {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -1330,78 +1305,6 @@ function mergeArrayObjectItems(arr: unknown[]): Record<string, unknown> | null {
     return found ? merged : null;
 }
 
-function buildImportMappingEntries(
-    value: unknown,
-    path: string,
-    entityName: string
-): { selectionPaths: string[]; mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[] } {
-    const selectionPaths: string[] = [path];
-    const mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[] = [];
-
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-        return { selectionPaths, mapObjects };
-    }
-
-    const obj = value as Record<string, unknown>;
-    const valueMappings: Record<string, string> = {};
-
-    for (const [key, childValue] of Object.entries(obj)) {
-        if (Array.isArray(childValue)) {
-            const mergedItem = mergeArrayObjectItems(childValue);
-            if (mergedItem !== null) {
-                // Array of objects → nested entity at the array-item path (|(Object)| convention).
-                // Don't select the array wrapper itself — the |(Object)| in the item path is
-                // sufficient for Mendix to iterate array items. Including the wrapper causes
-                // Mendix to create an intermediate ObjectMappingElement with no entity, which
-                // makes fixImportMappingElements assign an empty parent name to the association.
-                const child = buildImportMappingEntries(mergedItem, `${path}|${key}|(Object)`, `${entityName}_${toModelName(key)}`);
-                selectionPaths.push(...child.selectionPaths);
-                mapObjects.push(...child.mapObjects);
-            }
-            // Non-object arrays have no corresponding entity — skip them
-            continue;
-        }
-
-        selectionPaths.push(`${path}|${key}`);
-        if (childValue !== null && typeof childValue === 'object') {
-            const child = buildImportMappingEntries(
-                childValue,
-                `${path}|${key}`,
-                `${entityName}_${toModelName(key)}`
-            );
-            selectionPaths.push(...child.selectionPaths.slice(1));
-            mapObjects.push(...child.mapObjects);
-        } else {
-            valueMappings[key] = toModelName(key);
-        }
-    }
-
-    mapObjects.unshift({ path, entityQualifiedName: `${IMPLEMENTATION_MODULE}.${entityName}`, valueMappings });
-    return { selectionPaths, mapObjects };
-}
-
-function fixImportMappingElements(
-    elements: Mappings.ObjectMappingElement[],
-    parentEntityQualifiedName: string | null
-): void {
-    for (const el of elements) {
-        el.objectHandling = 'Create';
-
-        if (parentEntityQualifiedName !== null && el.entity) {
-            const parentEntityName = parentEntityQualifiedName.split('.').pop() ?? '';
-            const childEntityName = el.entity.split('.').pop() ?? '';
-            el.association = `${IMPLEMENTATION_MODULE}.${parentEntityName}_${childEntityName}`;
-        } else {
-            el.association = null;
-        }
-
-        fixImportMappingElements(
-            el.children.filter((c): c is Mappings.ObjectMappingElement => 'children' in c),
-            el.entity
-        );
-    }
-}
-
 async function createOrUpdateImportMapping(
     mappingName: string,
     jsonStructureQualifiedName: string,
@@ -1437,7 +1340,7 @@ async function createOrUpdateImportMapping(
     await sp.app.model.importMappings.setElementMapping(mapping.$ID, mapObjects);
 
     const hydratedMapping = (await sp.app.model.importMappings.loadAll(u => u.$ID === mapping.$ID))[0] ?? mapping;
-    fixImportMappingElements(hydratedMapping.rootMappingElements, null);
+    fixMappingElements(hydratedMapping.rootMappingElements, null, 'Create');
     await sp.app.model.importMappings.save(hydratedMapping);
 
     return { created: !existingInfo, mappingId: mapping.$ID };
@@ -1452,7 +1355,7 @@ async function createOrUpdateValueImportMapping(
     envelopePaths: string[],
     parentId: string
 ): Promise<ImportMappingResult> {
-    const { selectionPaths, mapObjects } = buildImportMappingEntries(parsedValuePayload, entityPath, baseEntityName);
+    const { selectionPaths, mapObjects } = buildMappingEntries(parsedValuePayload, entityPath, baseEntityName, false);
     const allSelectionPaths = [...envelopePaths, ...selectionPaths];
     return createOrUpdateImportMapping(mappingName, jsonStructureQualifiedName, allSelectionPaths, mapObjects, parentId);
 }
@@ -1466,7 +1369,7 @@ function buildHistoryImportMappingEntries(
     valuePayload: unknown
 ): { selectionPaths: string[]; mapObjects: { path: string; entityQualifiedName: string; valueMappings: Record<string, string> }[] } {
     const valuePath = `${historyPath}|value`;
-    const valueEntries = buildImportMappingEntries(valuePayload, valuePath, baseEntityName);
+    const valueEntries = buildMappingEntries(valuePayload, valuePath, baseEntityName, false);
 
     return {
         selectionPaths: [
@@ -1493,10 +1396,7 @@ async function buildHistoryEntities(
     baseEntityName: string
 ): Promise<DomainModelResult> {
     const sp = getStudioPro();
-    const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
-    if (!domainModel) {
-        throw new Error(`Module '${IMPLEMENTATION_MODULE}' was not found or has no domain model.`);
-    }
+    const domainModel = await getDomainModelOrThrow();
 
     const startY = computeEntityStartY(domainModel);
     const historyEntityInfo = await ensureEntity(domainModel, historyEntityName);
@@ -1652,10 +1552,7 @@ export async function createWriteMicroflow(
             mappingQualifiedName: `${IMPLEMENTATION_MODULE}.${exportMappingName}`,
             entityVariableName: 'InputObject',
         },
-        extraHeaders: [
-            { key: 'Accept', value: `'application/json'` },
-            { key: 'Content-Type', value: `'application/json'` },
-        ],
+        extraHeaders: JSON_EXTRA_HEADERS,
         annotationText: 'Official i3X writeback uses PUT /objects/{elementId}/value. Change this REST call HTTP method to PUT manually before using this microflow.',
         authRefs,
     });

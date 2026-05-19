@@ -39,22 +39,22 @@ export interface RequestTemplate {
 
 export function buildHistoryMicroflowRequestBody(): RequestTemplate {
     return {
-    // {1} = $ElementId, {2} = ISO 8601 UTC start, {3} = ISO 8601 UTC end
+        // {1} = $ElementId, {2} = ISO 8601 UTC start, {3} = ISO 8601 UTC end
         text: `{{"elementIds":["{1}"],"startTime":"{2}","endTime":"{3}"}`,
-    args: ['$ElementId', "formatDateTimeUTC($StartTime, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')", "formatDateTimeUTC($EndTime, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')"],
+        args: ['$ElementId', "formatDateTimeUTC($StartTime, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')", "formatDateTimeUTC($EndTime, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')"],
     };
 }
 
 export function buildValueQueryMicroflowRequestBody(): RequestTemplate {
-        return {
-                text: `{{
+    return {
+        text: `{{
   "elementIds": [
         "{1}"
   ],
   "maxDepth": 1
 }`,
-                args: ['$ElementId'],
-        };
+        args: ['$ElementId'],
+    };
 }
 
 async function addHttpHeadersToConfiguration(
@@ -226,9 +226,6 @@ export async function populateMicroflowWithRestCall(
     const locationTemplate = (await sp.app.model.microflows.createElement(
         'Microflows$StringTemplate'
     )) as Microflows.StringTemplate;
-    const locationTemplateArg = (await sp.app.model.microflows.createElement(
-        'Microflows$TemplateArgument'
-    )) as Microflows.TemplateArgument;
     const resultHandling = (await sp.app.model.microflows.createElement(
         'Microflows$ResultHandling'
     )) as Microflows.ResultHandling;
@@ -315,6 +312,9 @@ export async function populateMicroflowWithRestCall(
         }
         locationTemplate.arguments = locationTemplateArgs;
     } else {
+        const locationTemplateArg = (await sp.app.model.microflows.createElement(
+            'Microflows$TemplateArgument'
+        )) as Microflows.TemplateArgument;
         locationTemplate.text = '{1}';
         locationTemplateArg.expression = `'${url}'`;
         locationTemplate.arguments = [locationTemplateArg];

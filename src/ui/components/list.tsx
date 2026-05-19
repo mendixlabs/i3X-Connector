@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styles from '../index.module.css';
-import { ListProps, ObjectType, isObjectTypeArray } from '../types';
+import { ListProps, ObjectType, isObjectTypeArray, shortNs } from '../types';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -32,8 +32,6 @@ const List: React.FC<ListProps> = ({ apiData, selectedId, onSelect, onCreateObje
         (currentPage - 1) * ITEMS_PER_PAGE,
         currentPage * ITEMS_PER_PAGE
     );
-
-    const shortNs = (uri: string) => uri.split('/').filter(Boolean).pop() ?? uri;
 
     return (
         <div className={styles.card}>

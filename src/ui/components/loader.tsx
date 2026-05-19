@@ -4,7 +4,7 @@ import styles from '../index.module.css';
 import { LoaderProps } from '../types';
 import { getObjectTypesUrl, unwrapI3xResult } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
-import { IMPLEMENTATION_MODULE } from '../types/connection';
+import { IMPLEMENTATION_MODULE, CONSTANT_API_BASE_URL, CONSTANT_API_USERNAME, CONSTANT_API_PASSWORD, CONSTANT_API_TOKEN } from '../constants';
 
 const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) => {
     const studioPro = getStudioProApi(context);
@@ -22,11 +22,12 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
 
     useEffect(() => {
         const preloadFromConstants = async () => {
+            // Only reads flat (non-suffixed) constants — no preload in multi-server mode.
             try {
                 const units = await studioPro.app.model.constants.getUnitsInfo();
                 const mine = units.filter(u => u.moduleName === IMPLEMENTATION_MODULE);
 
-                const baseUrlUnit = mine.find(u => u.name === 'API_BaseUrl');
+                const baseUrlUnit = mine.find(u => u.name === CONSTANT_API_BASE_URL);
                 if (!baseUrlUnit) return;
 
                 const baseUrlConstant = await studioPro.app.model.constants.load<Constants.Constant>(
@@ -36,8 +37,8 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
 
                 setUrl(baseUrlConstant.defaultValue);
 
-                const usernameUnit = mine.find(u => u.name === 'API_Username');
-                const passwordUnit = mine.find(u => u.name === 'API_Password');
+                const usernameUnit = mine.find(u => u.name === CONSTANT_API_USERNAME);
+                const passwordUnit = mine.find(u => u.name === CONSTANT_API_PASSWORD);
                 if (usernameUnit && passwordUnit) {
                     const [uc, pc] = await Promise.all([
                         studioPro.app.model.constants.load<Constants.Constant>('Constants$Constant', usernameUnit.$ID),
@@ -49,7 +50,7 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
                     return;
                 }
 
-                const tokenUnit = mine.find(u => u.name === 'API_Token');
+                const tokenUnit = mine.find(u => u.name === CONSTANT_API_TOKEN);
                 if (tokenUnit) {
                     const tc = await studioPro.app.model.constants.load<Constants.Constant>('Constants$Constant', tokenUnit.$ID);
                     if (tc?.defaultValue) {
