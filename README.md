@@ -2,7 +2,7 @@
 
 A Mendix Studio Pro extension that connects your Mendix app to the [CESMII i3X Smart Manufacturing Platform](https://i3x.cesmii.net/). It browses i3X object types and generates the corresponding Mendix domain model artifacts — entities, attributes, associations, JSON structures, import mappings, and microflows — directly inside Studio Pro.
 
-> **This is a personal hobby project.** It is not an official product of, endorsed by, or affiliated with Mendix or Siemens.
+> **This is a proof of concept.** It is not an official product of, endorsed by, or affiliated with CESMII.
 
 ## Quick install
 
