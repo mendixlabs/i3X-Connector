@@ -6,9 +6,13 @@ A Mendix Studio Pro extension that connects your Mendix app to the [CESMII i3X S
 
 ## Quick install
 
-For Mendix Studio Pro 11.10+, you can install the prebuilt module package directly from [Packages/i3X_Connector.mxmodule](Packages/i3X_Connector.mxmodule).
+The extension is available on the [Mendix Marketplace](https://marketplace.mendix.com/link/component/201816). For Mendix Studio Pro 11.10+, download it from the Marketplace and follow the in-product import flow.
 
-In App Explorer, right-click the **App** node and choose **Import Module Package**, then select [Packages/i3X_Connector.mxmodule](Packages/i3X_Connector.mxmodule).
+Alternatively, you can install the prebuilt module package directly from [Packages/i3X_Connector.mxmodule](Packages/i3X_Connector.mxmodule): in App Explorer, right-click the **App** node, choose **Import Module Package**, then select the file.
+
+## How to use
+
+Once the extension is installed, open it from the Studio Pro top menu: **Extensions → i3X Connector**. This opens the connector panel where you configure the connection and generate artifacts.
 
 ## What it does
 
@@ -30,11 +34,13 @@ In App Explorer, right-click the **App** node and choose **Import Module Package
 
 ## Installation
 
-This extension is not yet published to the Mendix Marketplace. You can either import the prebuilt module package or build the extension from source.
+There are three ways to install the extension.
 
-**Option A — import the prebuilt module package.** In App Explorer, right-click the **App** node, choose **Import Module Package**, and select [Packages/i3X_Connector.mxmodule](Packages/i3X_Connector.mxmodule).
+**Option A — install from the Mendix Marketplace.** Download the [i3X Connector](https://marketplace.mendix.com/link/component/201816) from the Marketplace and follow the in-product import flow.
 
-**Option B — build from source** (see [Development](#development) below), then copy the `dist/i3X-Connector/` folder into your Mendix app's `extensions/` directory.
+**Option B — import the prebuilt module package.** In App Explorer, right-click the **App** node, choose **Import Module Package**, and select [Packages/i3X_Connector.mxmodule](Packages/i3X_Connector.mxmodule).
+
+**Option C — build from source** (see [Development](#development) below), then copy the `dist/i3X-Connector/` folder into your Mendix app's `extensions/` directory.
 
 ## Development
 
