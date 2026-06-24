@@ -589,6 +589,32 @@
     line-height: 1.5;
 }
 
+.descriptionRow {
+    background: var(--bg-row-sel);
+}
+
+.descriptionCell {
+    padding: 0 16px 12px;
+    white-space: normal;
+    border-top: none;
+}
+
+.descriptionLabel {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+    margin-bottom: 3px;
+}
+
+.descriptionText {
+    font-size: 13px;
+    color: var(--text-body);
+    line-height: 1.55;
+}
+
 /* ─── Empty state ────────────────────────────────────────────────────────────── */
 .emptyState {
     display: flex;

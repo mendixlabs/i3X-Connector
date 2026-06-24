@@ -62,38 +62,50 @@ const List: React.FC<ListProps> = ({ apiData, selectedId, onSelect, onCreateObje
                     <table className={styles.pipelineTable}>
                         <thead>
                             <tr className={styles.tableHeader}>
-                                <th className={styles.tableHeaderCell} style={{ width: '20%' }}>Element ID</th>
-                                <th className={styles.tableHeaderCell} style={{ width: '20%' }}>Display Name</th>
-                                <th className={styles.tableHeaderCell} style={{ width: '15%' }}>Namespace</th>
-                                <th className={styles.tableHeaderCell} style={{ width: '10%' }}>Schema Type</th>
-                                <th className={styles.tableHeaderCell} style={{ width: '35%' }}>Description</th>
+                                <th className={styles.tableHeaderCell} style={{ width: '30%' }}>Element ID</th>
+                                <th className={styles.tableHeaderCell} style={{ width: '30%' }}>Display Name</th>
+                                <th className={styles.tableHeaderCell} style={{ width: '20%' }}>Namespace</th>
+                                <th className={styles.tableHeaderCell} style={{ width: '20%' }}>Schema Type</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {paginatedItems.map((item) => (
-                                <tr
-                                    key={item.elementId}
-                                    onClick={() => onSelect(item)}
-                                    className={`${styles.tableRow} ${selectedId === item.elementId ? styles.selected : ''}`}
-                                >
-                                    <td className={styles.tableCell}>
-                                        <span className={styles.idCell}>{item.elementId}</span>
-                                    </td>
-                                    <td className={styles.tableCell}>{item.displayName}</td>
-                                    <td className={styles.tableCell}>
-                                        <span className={styles.nsBadge}>{shortNs(item.namespaceUri)}</span>
-                                    </td>
-                                    <td className={styles.tableCell}>
-                                        {item.schema?.type
-                                            ? <span className={styles.typeBadge}>{item.schema.type as string}</span>
-                                            : <span className={styles.textFaint}>—</span>
-                                        }
-                                    </td>
-                                    <td className={`${styles.tableCell} ${styles.descCell}`}>
-                                        {item.schema?.description as string ?? <span className={styles.textFaint}>—</span>}
-                                    </td>
-                                </tr>
-                            ))}
+                            {paginatedItems.map((item) => {
+                                const isSelected = selectedId === item.elementId;
+                                const description = item.schema?.description as string | undefined;
+                                return (
+                                    <React.Fragment key={item.elementId}>
+                                        <tr
+                                            onClick={() => onSelect(item)}
+                                            className={`${styles.tableRow} ${isSelected ? styles.selected : ''}`}
+                                        >
+                                            <td className={styles.tableCell}>
+                                                <span className={styles.idCell} title={item.elementId}>{item.elementId}</span>
+                                            </td>
+                                            <td className={styles.tableCell}>{item.displayName}</td>
+                                            <td className={styles.tableCell}>
+                                                <span className={styles.nsBadge}>{shortNs(item.namespaceUri)}</span>
+                                            </td>
+                                            <td className={styles.tableCell}>
+                                                {item.schema?.type
+                                                    ? <span className={styles.typeBadge}>{item.schema.type as string}</span>
+                                                    : <span className={styles.textFaint}>—</span>
+                                                }
+                                            </td>
+                                        </tr>
+                                        {isSelected && (
+                                            <tr className={styles.descriptionRow}>
+                                                <td className={styles.descriptionCell} colSpan={4}>
+                                                    <span className={styles.descriptionLabel}>Description</span>
+                                                    {description
+                                                        ? <span className={styles.descriptionText}>{description}</span>
+                                                        : <span className={styles.textFaint}>No description provided.</span>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </React.Fragment>
+                                );
+                            })}
                         </tbody>
                     </table>
 
