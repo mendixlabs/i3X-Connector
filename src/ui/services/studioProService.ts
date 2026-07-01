@@ -139,10 +139,24 @@ function buildRestLocationTemplate(
     };
 }
 
+// Words Mendix reserves for entities, attributes and enumeration values (Java keywords
+// plus a handful of Mendix system fields like 'id', 'changeddate', 'owner').
+// https://docs.mendix.com/refguide/enumerations/#reserved-words
+const RESERVED_MODEL_NAMES = new Set([
+    '_', 'abstract', 'assert', 'boolean', 'break', 'byte', 'case', 'catch', 'changedby', 'changeddate',
+    'char', 'class', 'com', 'con', 'const', 'context', 'continue', 'createddate', 'currentuser', 'default',
+    'do', 'double', 'else', 'empty', 'enum', 'extends', 'false', 'final', 'finally', 'float', 'for', 'goto',
+    'guid', 'id', 'if', 'implements', 'import', 'instanceof', 'int', 'interface', 'long', 'mendixobject',
+    'native', 'new', 'null', 'object', 'owner', 'package', 'private', 'protected', 'public', 'return',
+    'short', 'static', 'strictfp', 'submetaobjectname', 'super', 'switch', 'synchronized', 'this', 'throw',
+    'throws', 'transient', 'true', 'try', 'type', 'void', 'volatile', 'while',
+]);
+
 function toModelName(raw: string): string {
     const compact = raw.trim().replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_');
     const startsWithLetter = /^[A-Za-z]/.test(compact) ? compact : `N_${compact}`;
-    return startsWithLetter || 'Unnamed';
+    const name = startsWithLetter || 'Unnamed';
+    return RESERVED_MODEL_NAMES.has(name.toLowerCase()) ? `${name}_` : name;
 }
 
 function primaryType(type: unknown): string | undefined {
@@ -217,7 +231,12 @@ async function ensureEntity(
     }
     domainModel.entities.push(entity);
 
-    return { entity, entityName, created: true };
+    // Callers add attributes to this entity after it's returned (a child-collection
+    // mutation on an already-pushed element) — re-read the live reference so those
+    // pushes land on the tracked object instead of the now-detached local one.
+    const liveEntity = domainModel.entities.find(e => e.name === entityName) ?? entity;
+
+    return { entity: liveEntity, entityName, created: true };
 }
 
 async function ensureAssociation(
@@ -530,7 +549,11 @@ async function ensureGroupEntityAndAssociation(
     depth: number,
     counters: EntityCounters
 ): Promise<boolean> {
-    const groupEntityInfo = await ensureEntity(domainModel, `${parentEntityName}_${propertyName}`, location);
+    // Sanitize the property-name segment before concatenating, matching how
+    // buildMappingEntries names the same entity on the import-mapping side —
+    // sanitizing the whole compound string afterward isn't equivalent, since a
+    // reserved word embedded mid-name (e.g. "type") only gets caught this way.
+    const groupEntityInfo = await ensureEntity(domainModel, `${parentEntityName}_${toModelName(propertyName)}`, location);
     if (groupEntityInfo.created) {
         counters.groupEntitiesCreated += 1;
     }
