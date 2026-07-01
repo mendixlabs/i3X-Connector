@@ -68,7 +68,7 @@ export const component: IComponent = {
                             displayDurationInSeconds: 6,
                         });
                         if (result.microflowCreated && result.microflowId) {
-                            await studioPro.ui.editors.editDocument(result.microflowId);
+                            await studioPro.ui.editors.editDocument({ id: result.microflowId });
                             await studioPro.ui.messageBoxes.show(
                                 "warning",
                                 "Set Objects List REST method to GET",
