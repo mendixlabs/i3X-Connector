@@ -1,4 +1,4 @@
-import type { DomainModels, Mappings, Projects, StudioProApi } from '@mendix/extensions-api';
+import type { DomainModels, Mappings, Microflows, Projects, StudioProApi } from '@mendix/extensions-api';
 import {
     IMPLEMENTATION_MODULE,
     CONSTANT_API_BASE_URL,
@@ -196,18 +196,26 @@ function countDirectLeafProperties(properties: Record<string, AnyProperty>): num
 
 async function ensureEntity(
     domainModel: DomainModels.DomainModel,
-    preferredName: string
+    preferredName: string,
+    location?: { x: number; y: number }
 ): Promise<{ entity: DomainModels.Entity; entityName: string; created: boolean }> {
     const entityName = toModelName(preferredName);
-    const existing = domainModel.getEntity(entityName);
+    const existing = domainModel.entities.find(e => e.name === entityName);
     if (existing) {
         return { entity: existing, entityName, created: false };
     }
 
-    const entity = await domainModel.addEntity({ name: entityName });
-    if (entity.generalization.$Type === 'DomainModels$NoGeneralization') {
-        entity.generalization.persistable = false;
+    const sp = getStudioPro();
+    const entity = await sp.app.model.domainModels.createElement<DomainModels.Entity>('DomainModels$Entity', {
+        name: entityName,
+        isPersistable: false,
+    });
+    // Position before push: once pushed into domainModel.entities, the returned
+    // reference is detached and later mutations on it can be silently dropped.
+    if (location) {
+        entity.location = location;
     }
+    domainModel.entities.push(entity);
 
     return { entity, entityName, created: true };
 }
@@ -219,17 +227,41 @@ async function ensureAssociation(
     childEntityId: string,
     isArrayAssociation: boolean
 ): Promise<boolean> {
-    if (domainModel.getAssociation(associationName)) {
+    if (domainModel.associations.find(a => a.name === associationName)) {
         return false;
     }
 
-    await domainModel.addAssociation({
-        name: associationName,
-        parentEntity: parentEntityId,
-        childEntity: childEntityId,
-        multiplicity: isArrayAssociation ? 'many_to_many' : 'one_to_many',
-    });
+    const sp = getStudioPro();
+    const association = await sp.app.model.domainModels.createElement<DomainModels.Association>(
+        'DomainModels$Association',
+        {
+            name: associationName,
+            parentEntity: parentEntityId,
+            childEntity: childEntityId,
+            multiplicity: isArrayAssociation ? 'many_to_many' : 'one_to_many',
+        }
+    );
+    domainModel.associations.push(association);
     return true;
+}
+
+async function ensureAttribute(
+    entity: DomainModels.Entity,
+    attributeName: string,
+    type: DomainModels.AttributeCreationOptions['type']
+): Promise<{ attribute: DomainModels.Attribute; created: boolean }> {
+    const existing = entity.attributes.find(a => a.name === attributeName);
+    if (existing) {
+        return { attribute: existing, created: false };
+    }
+
+    const sp = getStudioPro();
+    const attribute = await sp.app.model.domainModels.createElement<DomainModels.Attribute>('DomainModels$Attribute', {
+        name: attributeName,
+        type,
+    });
+    entity.attributes.push(attribute);
+    return { attribute, created: true };
 }
 
 async function fetchJsonSampleResponse(
@@ -456,6 +488,13 @@ interface EntityCounters {
 const OBJECT_LIST_ENTITY_NAME = 'i3X_Object';
 const OBJECT_LIST_ATTRIBUTE_NAMES = ['elementId', 'displayName', 'typeElementId', 'parentId'] as const;
 
+// ── Layout strategy ────────────────────────────────────────────────────────
+// Top-level group entities (depth 1) are packed into one column right of the
+// base entity; their Y position is computed on demand by getGroupY, which sums
+// the heights of every earlier group in the list. Anything nested deeper
+// (depth >= 2) has no natural column, so it is placed by a single running
+// cursor, counters.nextNestedEntityY, that only advances when a new entity is
+// actually created.
 function computeEntityStartY(domainModel: DomainModels.DomainModel): number {
     let startY = 0;
     for (const ent of domainModel.entities) {
@@ -475,6 +514,36 @@ function getGroupY(groupEntryList: [string, AnyProperty][], startY: number, grou
     return groupY;
 }
 
+// Creates (or finds) a group entity for one object/array property, associates it to its
+// parent, and recurses into its own properties. Shared by the top-level group loop in
+// buildDomainModelEntities (depth 1, column-packed via getGroupY) and by the nested case
+// below (depth >= 2, placed via the running nextNestedEntityY cursor) — the two differ only
+// in how they compute `location`, which the caller works out before calling this.
+async function ensureGroupEntityAndAssociation(
+    domainModel: DomainModels.DomainModel,
+    parentEntityName: string,
+    parentEntity: DomainModels.Entity,
+    propertyName: string,
+    nestedProperties: Record<string, AnyProperty>,
+    isResolvableArray: boolean,
+    location: { x: number; y: number },
+    depth: number,
+    counters: EntityCounters
+): Promise<boolean> {
+    const groupEntityInfo = await ensureEntity(domainModel, `${parentEntityName}_${propertyName}`, location);
+    if (groupEntityInfo.created) {
+        counters.groupEntitiesCreated += 1;
+    }
+
+    const assocName = `${parentEntityName}_${groupEntityInfo.entityName}`;
+    if (await ensureAssociation(domainModel, assocName, parentEntity.$ID, groupEntityInfo.entity.$ID, isResolvableArray)) {
+        counters.associationsCreated += 1;
+    }
+
+    await populateEntityProperties(domainModel, groupEntityInfo.entityName, groupEntityInfo.entity, nestedProperties, depth + 1, counters);
+    return groupEntityInfo.created;
+}
+
 async function populateEntityProperties(
     domainModel: DomainModels.DomainModel,
     parentEntityName: string,
@@ -488,33 +557,21 @@ async function populateEntityProperties(
 
         if (nestedProperties) {
             const isResolvableArray = isArrayProperty(property);
-            const groupEntityInfo = await ensureEntity(domainModel, `${parentEntityName}_${propertyName}`);
-
-            if (groupEntityInfo.created) {
-                counters.groupEntitiesCreated += 1;
-                groupEntityInfo.entity.location = {
-                    x: depth * (BASE_WIDTH + H_GAP),
-                    y: counters.nextNestedEntityY,
-                };
+            const location = { x: depth * (BASE_WIDTH + H_GAP), y: counters.nextNestedEntityY };
+            const created = await ensureGroupEntityAndAssociation(
+                domainModel, parentEntityName, parentEntity, propertyName, nestedProperties, isResolvableArray, location, depth, counters
+            );
+            if (created) {
                 counters.nextNestedEntityY += entityHeight(countDirectLeafProperties(nestedProperties)) + V_GAP;
             }
-
-            const assocName = `${parentEntityName}_${groupEntityInfo.entityName}`;
-            if (await ensureAssociation(domainModel, assocName, parentEntity.$ID, groupEntityInfo.entity.$ID, isResolvableArray)) {
-                counters.associationsCreated += 1;
-            }
-
-            await populateEntityProperties(domainModel, groupEntityInfo.entityName, groupEntityInfo.entity, nestedProperties, depth + 1, counters);
             continue;
         }
 
         if (isArrayProperty(property)) continue;
 
         const attributeName = toModelName(propertyName);
-        if (parentEntity.getAttribute(attributeName)) continue;
-
-        await parentEntity.addAttribute({ name: attributeName, type: getAttributeType(property as LeafProperty) });
-        counters.attributesCreated += 1;
+        const { created } = await ensureAttribute(parentEntity, attributeName, getAttributeType(property as LeafProperty));
+        if (created) counters.attributesCreated += 1;
     }
 }
 
@@ -539,10 +596,7 @@ async function buildDomainModelEntities(selectedObject: ObjectType): Promise<Dom
     }, -V_GAP);
     const baseY = startY + Math.max(0, (groupColumnHeight - entityHeight(leafCount)) / 2);
 
-    const baseEntityInfo = await ensureEntity(domainModel, baseEntityName);
-    if (baseEntityInfo.created) {
-        baseEntityInfo.entity.location = { x: 0, y: baseY };
-    }
+    const baseEntityInfo = await ensureEntity(domainModel, baseEntityName, { x: 0, y: baseY });
 
     const counters: EntityCounters = {
         groupEntitiesCreated: 0,
@@ -555,21 +609,14 @@ async function buildDomainModelEntities(selectedObject: ObjectType): Promise<Dom
     for (const [groupIndex, [propertyName, property]] of groupEntryList.entries()) {
         const nestedProperties = getChildPropertiesIfAny(property)!;
         const isResolvableArray = isArrayProperty(property);
-        const groupEntityInfo = await ensureEntity(domainModel, `${baseEntityName}_${propertyName}`);
-
-        if (groupEntityInfo.created) {
-            counters.groupEntitiesCreated += 1;
-            const groupY = getGroupY(groupEntryList, startY, groupIndex);
-            groupEntityInfo.entity.location = { x: BASE_WIDTH + H_GAP, y: groupY };
+        const groupY = getGroupY(groupEntryList, startY, groupIndex);
+        const created = await ensureGroupEntityAndAssociation(
+            domainModel, baseEntityName, baseEntityInfo.entity, propertyName, nestedProperties, isResolvableArray,
+            { x: BASE_WIDTH + H_GAP, y: groupY }, 1, counters
+        );
+        if (created) {
             counters.nextNestedEntityY = Math.max(counters.nextNestedEntityY, groupY + entityHeight(countDirectLeafProperties(nestedProperties)) + V_GAP);
         }
-
-        const assocName = `${baseEntityName}_${groupEntityInfo.entityName}`;
-        if (await ensureAssociation(domainModel, assocName, baseEntityInfo.entity.$ID, groupEntityInfo.entity.$ID, isResolvableArray)) {
-            counters.associationsCreated += 1;
-        }
-
-        await populateEntityProperties(domainModel, groupEntityInfo.entityName, groupEntityInfo.entity, nestedProperties, 2, counters);
     }
 
     // ── Leaf properties → attributes on base entity ───────────────────────────
@@ -577,10 +624,8 @@ async function buildDomainModelEntities(selectedObject: ObjectType): Promise<Dom
         if (getChildPropertiesIfAny(property) !== null || isArrayProperty(property)) continue;
 
         const attributeName = toModelName(propertyName);
-        if (baseEntityInfo.entity.getAttribute(attributeName)) continue;
-
-        await baseEntityInfo.entity.addAttribute({ name: attributeName, type: getAttributeType(property as LeafProperty) });
-        counters.attributesCreated += 1;
+        const { created } = await ensureAttribute(baseEntityInfo.entity, attributeName, getAttributeType(property as LeafProperty));
+        if (created) counters.attributesCreated += 1;
     }
 
     await sp.app.model.domainModels.save(domainModel);
@@ -599,16 +644,12 @@ async function ensureObjectListEntity(): Promise<DomainModelResult> {
     const domainModel = await getDomainModelOrThrow();
 
     const startY = computeEntityStartY(domainModel);
-    const entityInfo = await ensureEntity(domainModel, OBJECT_LIST_ENTITY_NAME);
-    if (entityInfo.created) {
-        entityInfo.entity.location = { x: 0, y: startY };
-    }
+    const entityInfo = await ensureEntity(domainModel, OBJECT_LIST_ENTITY_NAME, { x: 0, y: startY });
 
     let attributesCreated = 0;
     for (const attributeName of OBJECT_LIST_ATTRIBUTE_NAMES) {
-        if (entityInfo.entity.getAttribute(attributeName)) continue;
-        await entityInfo.entity.addAttribute({ name: attributeName, type: 'String' });
-        attributesCreated += 1;
+        const { created } = await ensureAttribute(entityInfo.entity, attributeName, 'String');
+        if (created) attributesCreated += 1;
     }
 
     await sp.app.model.domainModels.save(domainModel);
@@ -626,8 +667,8 @@ async function ensureDateTimeAttribute(entityName: string, attributeName: string
     const sp = getStudioPro();
     const domainModel = await getDomainModelOrThrow();
 
-    const entity = domainModel.getEntity(entityName);
-    const attribute = entity?.getAttribute(attributeName);
+    const entity = domainModel.entities.find(e => e.name === entityName);
+    const attribute = entity?.attributes.find(a => a.name === attributeName);
     if (!attribute || attribute.type.$Type === 'DomainModels$DateTimeAttributeType') {
         return;
     }
@@ -686,12 +727,10 @@ function buildGenericObjectListSnippet(): string {
 // Array items use |(Object)| as a path segment, as confirmed by jsonStructures.getElements().
 const VALUE_RESPONSE_PATH = `${OBJECT_PATH}|results|${OBJECT_PATH}|result|value`;
 const VALUE_RESULT_PATH = `${OBJECT_PATH}|results|${OBJECT_PATH}|result`;
-const VALUE_ENVELOPE_SELECTION_PATHS: string[] = [];
 const WRITE_VALUE_OBJECT_PATH = `${OBJECT_PATH}|value`;
 
 // Paths in the official /objects/history response.
 const HISTORY_VALUE_PATH = `${OBJECT_PATH}|results|${OBJECT_PATH}|result|values|${OBJECT_PATH}`;
-const HISTORY_ENVELOPE_SELECTION_PATHS: string[] = [];
 
 async function createValueQueryArtifacts(
     objectType: ObjectType,
@@ -725,7 +764,6 @@ async function createValueQueryArtifacts(
         valuePayload,
         baseEntityName,
         valueImportEntityPath,
-        VALUE_ENVELOPE_SELECTION_PATHS,
         endpointFolderId
     );
 
@@ -760,7 +798,7 @@ async function createOrUpdateObjectListImportMapping(
         return path;
     });
 
-    const itemPath = fieldPaths[0].slice(0, -(`|${OBJECT_LIST_ATTRIBUTE_NAMES[0]}`).length);
+    const itemPath = fieldPaths[0].split('|').slice(0, -1).join('|');
     const selectionPaths = [itemPath, ...fieldPaths];
     const valueMappings = Object.fromEntries(
         OBJECT_LIST_ATTRIBUTE_NAMES.map(attributeName => [attributeName, attributeName])
@@ -844,11 +882,13 @@ export async function createQueryValuesMicroflow(
     }
 
     const microflow = await sp.app.model.microflows.addMicroflow(endpointFolderId, { name: microflowName }, false);
-    const elementIdParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ElementId', type: 'String' });
-    if (elementIdParam) {
-        elementIdParam.size = { width: 30, height: 30 };
-        elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
-    }
+    const elementIdParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
+        'Microflows$MicroflowParameterObject',
+        { name: 'ElementId', type: 'String' }
+    );
+    elementIdParam.size = { width: 30, height: 30 };
+    elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
+    microflow.objectCollection.objects.push(elementIdParam);
 
     const requestBody = buildValueQueryMicroflowRequestBody();
     const locationTemplate = buildRestLocationTemplate('/objects/value', baseUrlConstantRef);
@@ -901,7 +941,7 @@ export async function createHistoryMicroflow(
     // Require value-query artifacts to exist first so we can reuse the sampled
     // latest-value payload when building the history entry shape.
     const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
-    if (!domainModel || !domainModel.getEntity(baseEntityName)) {
+    if (!domainModel || !domainModel.entities.find(e => e.name === baseEntityName)) {
         throw new Error(
             `Entity '${baseEntityName}' not found in module '${IMPLEMENTATION_MODULE}'. ` +
             `Run "Create last-known-value query microflow" first.`
@@ -937,7 +977,7 @@ export async function createHistoryMicroflow(
     const importMappingResult = await createOrUpdateImportMapping(
         importMappingName,
         `${IMPLEMENTATION_MODULE}.${jsonStructureName}`,
-        [...HISTORY_ENVELOPE_SELECTION_PATHS, ...historySelPaths],
+        historySelPaths,
         historyMapObjects,
         endpointFolderId
     );
@@ -956,25 +996,29 @@ export async function createHistoryMicroflow(
 
     const microflow = await sp.app.model.microflows.addMicroflow(endpointFolderId, { name: microflowName }, false);
 
-    const elementIdParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ElementId', type: 'String' });
-    if (elementIdParam) {
-        elementIdParam.size = { width: 30, height: 30 };
-        elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
-    }
+    const elementIdParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
+        'Microflows$MicroflowParameterObject',
+        { name: 'ElementId', type: 'String' }
+    );
+    elementIdParam.size = { width: 30, height: 30 };
+    elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
+    microflow.objectCollection.objects.push(elementIdParam);
 
-    await microflow.objectCollection.addMicroflowParameterObject({ name: 'StartTime', type: 'DateTime' });
-    const startTimeParam = microflow.objectCollection.getMicroflowParameterObject('StartTime');
-    if (startTimeParam) {
-        startTimeParam.size = { width: 30, height: 30 };
-        startTimeParam.relativeMiddlePoint = { x: 200, y: 0 };
-    }
+    const startTimeParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
+        'Microflows$MicroflowParameterObject',
+        { name: 'StartTime', type: 'DateTime' }
+    );
+    startTimeParam.size = { width: 30, height: 30 };
+    startTimeParam.relativeMiddlePoint = { x: 200, y: 0 };
+    microflow.objectCollection.objects.push(startTimeParam);
 
-    await microflow.objectCollection.addMicroflowParameterObject({ name: 'EndTime', type: 'DateTime' });
-    const endTimeParam = microflow.objectCollection.getMicroflowParameterObject('EndTime');
-    if (endTimeParam) {
-        endTimeParam.size = { width: 30, height: 30 };
-        endTimeParam.relativeMiddlePoint = { x: 300, y: 0 };
-    }
+    const endTimeParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
+        'Microflows$MicroflowParameterObject',
+        { name: 'EndTime', type: 'DateTime' }
+    );
+    endTimeParam.size = { width: 30, height: 30 };
+    endTimeParam.relativeMiddlePoint = { x: 300, y: 0 };
+    microflow.objectCollection.objects.push(endTimeParam);
 
     const { text: bodyText, args: bodyArgs } = buildHistoryMicroflowRequestBody();
     const locationTemplate = buildRestLocationTemplate('/objects/history', baseUrlConstantRef);
@@ -1352,12 +1396,10 @@ async function createOrUpdateValueImportMapping(
     parsedValuePayload: unknown,
     baseEntityName: string,
     entityPath: string,
-    envelopePaths: string[],
     parentId: string
 ): Promise<ImportMappingResult> {
     const { selectionPaths, mapObjects } = buildMappingEntries(parsedValuePayload, entityPath, baseEntityName, false);
-    const allSelectionPaths = [...envelopePaths, ...selectionPaths];
-    return createOrUpdateImportMapping(mappingName, jsonStructureQualifiedName, allSelectionPaths, mapObjects, parentId);
+    return createOrUpdateImportMapping(mappingName, jsonStructureQualifiedName, selectionPaths, mapObjects, parentId);
 }
 
 // Builds import mapping entries for a history response entry, reusing the existing value
@@ -1399,22 +1441,17 @@ async function buildHistoryEntities(
     const domainModel = await getDomainModelOrThrow();
 
     const startY = computeEntityStartY(domainModel);
-    const historyEntityInfo = await ensureEntity(domainModel, historyEntityName);
-    if (historyEntityInfo.created) {
-        historyEntityInfo.entity.location = { x: 0, y: startY };
-    }
+    const historyEntityInfo = await ensureEntity(domainModel, historyEntityName, { x: 0, y: startY });
 
     let attributesCreated = 0;
-    if (!historyEntityInfo.entity.getAttribute('quality')) {
-        await historyEntityInfo.entity.addAttribute({ name: 'quality', type: 'String' });
+    if ((await ensureAttribute(historyEntityInfo.entity, 'quality', 'String')).created) {
         attributesCreated++;
     }
-    if (!historyEntityInfo.entity.getAttribute('timestamp')) {
-        await historyEntityInfo.entity.addAttribute({ name: 'timestamp', type: 'DateTime' });
+    if ((await ensureAttribute(historyEntityInfo.entity, 'timestamp', 'DateTime')).created) {
         attributesCreated++;
     }
 
-    const baseEntity = domainModel.getEntity(baseEntityName);
+    const baseEntity = domainModel.entities.find(e => e.name === baseEntityName);
     let associationsCreated = 0;
     if (baseEntity) {
         const assocName = `${historyEntityInfo.entityName}_${baseEntityName}`;
@@ -1441,7 +1478,7 @@ export async function checkValueQueryEntitiesExist(
     const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
     if (!domainModel) return false;
     const entityName = toModelName(objectType.displayName);
-    return domainModel.getEntity(entityName) !== undefined;
+    return domainModel.entities.find(e => e.name === entityName) !== undefined;
 }
 
 export interface WriteMicroflowResult {
@@ -1459,15 +1496,14 @@ export async function createWriteMicroflow(
     const sp = getStudioPro();
     const { baseUrlConstantRef, authRefs, endpointFolderId } = await ensureEndpointConstants(connection);
 
-    const typeName = toModelName(objectType.displayName);
     const baseEntityName = toModelName(objectType.displayName);
-    const microflowName = `MF_${typeName}_Write`;
-    const exportMappingName = `EM_Write_${typeName}`;
+    const microflowName = `MF_${baseEntityName}_Write`;
+    const exportMappingName = `EM_Write_${baseEntityName}`;
 
     // Verify the base entity exists — the write microflow reuses entities created
     // by the last-known-values flow and must never create its own.
     const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
-    if (!domainModel || !domainModel.getEntity(baseEntityName)) {
+    if (!domainModel || !domainModel.entities.find(e => e.name === baseEntityName)) {
         throw new Error(
             `Entity '${baseEntityName}' not found in module '${IMPLEMENTATION_MODULE}'. ` +
             `Run "Create last-known-value query microflow" first.`
@@ -1527,21 +1563,25 @@ export async function createWriteMicroflow(
 
     const microflow = await sp.app.model.microflows.addMicroflow(endpointFolderId, { name: microflowName }, false);
 
-    const elementIdParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ElementId', type: 'String' });
-    if (elementIdParam) {
-        elementIdParam.size = { width: 30, height: 30 };
-        elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
-    }
+    const elementIdParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
+        'Microflows$MicroflowParameterObject',
+        { name: 'ElementId', type: 'String' }
+    );
+    elementIdParam.size = { width: 30, height: 30 };
+    elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
+    microflow.objectCollection.objects.push(elementIdParam);
 
-    const inputParam = await microflow.objectCollection.addMicroflowParameterObject({
-        name: 'InputObject',
-        type: 'Object',
-        entity: `${IMPLEMENTATION_MODULE}.${baseEntityName}`,
-    });
-    if (inputParam) {
-        inputParam.size = { width: 30, height: 30 };
-        inputParam.relativeMiddlePoint = { x: 200, y: 0 };
-    }
+    const inputParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
+        'Microflows$MicroflowParameterObject',
+        {
+            name: 'InputObject',
+            type: 'Object',
+            entity: `${IMPLEMENTATION_MODULE}.${baseEntityName}`,
+        }
+    );
+    inputParam.size = { width: 30, height: 30 };
+    inputParam.relativeMiddlePoint = { x: 200, y: 0 };
+    microflow.objectCollection.objects.push(inputParam);
 
     const locationTemplate = buildRestLocationTemplate('/objects/{2}/value', baseUrlConstantRef, ['$ElementId']);
     await populateMicroflowWithRestCall(sp, microflow, {
@@ -1606,11 +1646,13 @@ export async function createObjectsListMicroflow(
     }
 
     const microflow = await sp.app.model.microflows.addMicroflow(endpointFolderId, { name: microflowName }, false);
-    const objectTypeParam = await microflow.objectCollection.addMicroflowParameterObject({ name: 'ObjectType', type: 'String' });
-    if (objectTypeParam) {
-        objectTypeParam.size = { width: 30, height: 30 };
-        objectTypeParam.relativeMiddlePoint = { x: 100, y: 0 };
-    }
+    const objectTypeParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
+        'Microflows$MicroflowParameterObject',
+        { name: 'ObjectType', type: 'String' }
+    );
+    objectTypeParam.size = { width: 30, height: 30 };
+    objectTypeParam.relativeMiddlePoint = { x: 100, y: 0 };
+    microflow.objectCollection.objects.push(objectTypeParam);
 
     const locationTemplate = buildRestLocationTemplate('/objects?typeElementId={2}', baseUrlConstantRef, ['$ObjectType']);
     await populateMicroflowWithRestCall(sp, microflow, {

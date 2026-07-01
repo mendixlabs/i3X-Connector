@@ -21,6 +21,11 @@ function toTokenHeaderValue(auth: Extract<AuthConfig, { mode: 'token' }>): strin
     const prefix = auth.prefix.trim();
     const headerName = sanitizeHeaderName(auth.headerName) || 'Authorization';
 
+    // Tokens shaped like the i3X test server's ("i3x.<...>") are sent as-is on the default
+    // Authorization/Bearer settings, without the "Bearer " word — that server's Authorization
+    // header expects the raw token, not the usual "Bearer <token>" form. Only this narrow,
+    // known token shape skips the prefix; any custom header name or prefix still applies as
+    // configured. See reference_test_server memory for the token this matches.
     if (/^i3x\./i.test(token) && /^authorization$/i.test(headerName) && /^bearer$/i.test(prefix)) {
         return token;
     }

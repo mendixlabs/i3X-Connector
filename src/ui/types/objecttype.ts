@@ -41,7 +41,7 @@ export interface ObjectType {
 }
 
 export function isGroupProperty(p: AnyProperty): p is GroupProperty {
-    return p.type === 'object' && 'properties' in p && typeof p.properties === 'object';
+    return p.type === 'object' && typeof p.properties === 'object' && p.properties !== null;
 }
 
 export function isArrayProperty(p: AnyProperty): p is ArrayProperty {
