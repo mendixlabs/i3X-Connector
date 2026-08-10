@@ -24,6 +24,10 @@ export interface ObjectTypeFolders {
     mappingsFolderId: string;
 }
 
+export interface ObjectTypeArtifactContext extends EndpointSetup, ObjectTypeFolders {
+    objectTypeName: string;
+}
+
 function sanitizeFolderName(raw: string): string {
     return raw.trim().replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'Endpoint';
 }
@@ -51,6 +55,15 @@ export async function ensureObjectTypeFolders(parentId: string, objectTypeName: 
     const objectTypeFolder = await ensureFolder(parentId, sanitizeFolderName(objectTypeName));
     const mappingsFolder = await ensureFolder(objectTypeFolder.$ID, 'Mappings');
     return { objectTypeFolderId: objectTypeFolder.$ID, mappingsFolderId: mappingsFolder.$ID };
+}
+
+export async function ensureObjectTypeArtifactContext(
+    connection: ConnectionConfig,
+    objectTypeName: string
+): Promise<ObjectTypeArtifactContext> {
+    const endpoint = await ensureEndpointConstants(connection);
+    const folders = await ensureObjectTypeFolders(endpoint.endpointFolderId, objectTypeName);
+    return { ...endpoint, ...folders, objectTypeName };
 }
 
 function withSuffix(name: string, suffix: string): string {

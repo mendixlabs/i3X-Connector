@@ -24,10 +24,17 @@ import {
     populateMicroflowWithRestCall,
 } from './microflowBuilder';
 import { buildObjectTypeFromSample, buildSyntheticValueResponse, extractValueQueryPayload } from './schemaInference';
-import { ensureEndpointConstants, ensureObjectTypeFolders } from './endpointConfiguration';
+import { ensureEndpointConstants, ensureObjectTypeArtifactContext } from './endpointConfiguration';
 import { getStudioPro } from './studioProContext';
 import { countDirectLeafProperties, getAttributeType, getChildPropertiesIfAny, toModelName } from './modelUtils';
 import type { ImplementEntityResult, QueryValuesMicroflowResult } from './artifactResults';
+import { createOrUpdateJsonStructure, type JsonStructureResult } from './mappingService';
+import {
+    buildSubscriptionRestDefinitions,
+    buildSubscriptionSyncRequestExpression,
+    type SubscriptionArtifactNames,
+    type SubscriptionRestDefinition,
+} from './subscriptionTemplates';
 
 export { getStudioPro, initStudioPro } from './studioProContext';
 export { MENDIX_LONG_MAX } from './modelUtils';
@@ -39,16 +46,6 @@ export type { ArtifactCreationResult, ImplementEntityResult, QueryValuesMicroflo
  * Keep this file focused on orchestration and domain-model generation.
  */
 
-
-interface JsonStructureResult {
-    created: boolean;
-    jsonStructureId: string;
-}
-
-interface ImportMappingResult {
-    created: boolean;
-    mappingId: string;
-}
 
 interface JsonSampleResponse {
     parsed: unknown;
@@ -83,6 +80,13 @@ function buildRestLocationTemplate(
         text: `{1}${endpointTemplate}`,
         args: [baseUrlRef, ...argExpressions],
     };
+}
+
+async function findMicroflow(name: string): Promise<Microflows.Microflow | undefined> {
+    return (await getStudioPro().app.model.microflows.loadAll(
+        unit => unit.moduleName === IMPLEMENTATION_MODULE && unit.name === name,
+        1
+    ))[0];
 }
 
 async function ensureEntity(
@@ -415,33 +419,6 @@ async function ensureDateTimeAttribute(entityName: string, attributeName: string
     await sp.app.model.domainModels.save(domainModel);
 }
 
-async function createOrUpdateJsonStructure(
-    structureName: string,
-    jsonSnippet: string,
-    parentId: string
-): Promise<JsonStructureResult> {
-    const sp = getStudioPro();
-    const existingStructures = await sp.app.model.jsonStructures.getUnitsInfo();
-    const existingInfo = existingStructures.find(
-        u => u.moduleName === IMPLEMENTATION_MODULE && u.name === structureName
-    );
-
-    if (existingInfo) {
-        const loaded = await sp.app.model.jsonStructures.loadAll(u => u.$ID === existingInfo.$ID);
-        if (loaded.length > 0) {
-            loaded[0].jsonSnippet = jsonSnippet;
-            await sp.app.model.jsonStructures.save(loaded[0]);
-            return { created: false, jsonStructureId: loaded[0].$ID };
-        }
-        return { created: false, jsonStructureId: existingInfo.$ID };
-    }
-
-    const created = await sp.app.model.jsonStructures.addJsonStructure(parentId, { name: structureName, jsonSnippet });
-    await sp.app.model.jsonStructures.save(created);
-    return { created: true, jsonStructureId: created.$ID };
-}
-
-
 function buildGenericObjectListSnippet(): string {
     return JSON.stringify({
         success: true,
@@ -488,7 +465,7 @@ async function createValueQueryArtifacts(
     // the JSON Structure is intentionally created from the raw response body.
     const valuePayload = extractValueQueryPayload(sampleResponse.parsed);
     const valueImportEntityPath = getValueQueryImportEntityPath(sampleResponse.parsed);
-    const generatedObjectType = buildObjectTypeFromSample(baseEntityName, valuePayload);
+    const generatedObjectType = buildObjectTypeFromSample(baseEntityName, valuePayload, objectType.schema);
     const domainModelResult = await buildDomainModelEntities(generatedObjectType);
 
     const jsonStructureName = `JSON_${baseEntityName}`;
@@ -586,10 +563,9 @@ export async function createQueryValuesMicroflow(
     connection: ConnectionConfig
 ): Promise<QueryValuesMicroflowResult> {
     const sp = getStudioPro();
-    const endpointSetup = await ensureEndpointConstants(connection);
-    const { baseUrlConstantRef, authRefs, endpointFolderId } = endpointSetup;
     const objectTypeName = toModelName(objectType.displayName);
-    const { objectTypeFolderId, mappingsFolderId } = await ensureObjectTypeFolders(endpointFolderId, objectTypeName);
+    const { baseUrlConstantRef, authRefs, objectTypeFolderId, mappingsFolderId } =
+        await ensureObjectTypeArtifactContext(connection, objectTypeName);
     const microflowName = `MF_${objectTypeName}`;
 
     const objectsValueUrl = getObjectsValueUrl(connection.apiBaseUrl);
@@ -619,13 +595,7 @@ export async function createQueryValuesMicroflow(
     }
 
     const microflow = await sp.app.model.microflows.addMicroflow(objectTypeFolderId, { name: microflowName }, false);
-    const elementIdParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        { name: 'ElementId', type: 'String' }
-    );
-    elementIdParam.size = { width: 30, height: 30 };
-    elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
-    microflow.objectCollection.objects.push(elementIdParam);
+    await addMicroflowParameters(microflow, [{ name: 'ElementId' }]);
 
     const requestBody = buildValueQueryMicroflowRequestBody();
     const locationTemplate = buildRestLocationTemplate('/objects/value', baseUrlConstantRef);
@@ -667,10 +637,9 @@ export async function createHistoryMicroflow(
     connection: ConnectionConfig
 ): Promise<HistoryMicroflowResult> {
     const sp = getStudioPro();
-    const { baseUrlConstantRef, authRefs, endpointFolderId } = await ensureEndpointConstants(connection);
-
     const baseEntityName = toModelName(objectType.displayName);
-    const { objectTypeFolderId, mappingsFolderId } = await ensureObjectTypeFolders(endpointFolderId, baseEntityName);
+    const { baseUrlConstantRef, authRefs, objectTypeFolderId, mappingsFolderId } =
+        await ensureObjectTypeArtifactContext(connection, baseEntityName);
     const historyEntityName = `${baseEntityName}_History`;
     const microflowName = `MF_${baseEntityName}_History`;
     const jsonStructureName = `JSON_History_${baseEntityName}`;
@@ -705,9 +674,7 @@ export async function createHistoryMicroflow(
     await buildHistoryEntities(historyEntityName, baseEntityName);
     await ensureDateTimeAttribute(historyEntityName, 'timestamp');
 
-    const historySnippet = stringifyJsonWithDecimalIntegers(
-        buildHistoryResponseSample(objectType, historyValuePayload)
-    );
+    const historySnippet = buildSchemaAwareHistorySnippet(objectType, historyValuePayload);
     const jsonStructureResult = await createOrUpdateJsonStructure(jsonStructureName, historySnippet, mappingsFolderId);
     const { selectionPaths: historySelPaths, mapObjects: historyMapObjects } = buildHistoryImportMappingEntries(
         HISTORY_VALUE_PATH, historyEntityName, baseEntityName, historyValuePayload
@@ -734,29 +701,11 @@ export async function createHistoryMicroflow(
 
     const microflow = await sp.app.model.microflows.addMicroflow(objectTypeFolderId, { name: microflowName }, false);
 
-    const elementIdParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        { name: 'ElementId', type: 'String' }
-    );
-    elementIdParam.size = { width: 30, height: 30 };
-    elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
-    microflow.objectCollection.objects.push(elementIdParam);
-
-    const startTimeParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        { name: 'StartTime', type: 'DateTime' }
-    );
-    startTimeParam.size = { width: 30, height: 30 };
-    startTimeParam.relativeMiddlePoint = { x: 200, y: 0 };
-    microflow.objectCollection.objects.push(startTimeParam);
-
-    const endTimeParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        { name: 'EndTime', type: 'DateTime' }
-    );
-    endTimeParam.size = { width: 30, height: 30 };
-    endTimeParam.relativeMiddlePoint = { x: 300, y: 0 };
-    microflow.objectCollection.objects.push(endTimeParam);
+    await addMicroflowParameters(microflow, [
+        { name: 'ElementId' },
+        { name: 'StartTime', type: 'DateTime' },
+        { name: 'EndTime', type: 'DateTime' },
+    ]);
 
     const { text: bodyText, args: bodyArgs } = buildHistoryMicroflowRequestBody();
     const locationTemplate = buildRestLocationTemplate('/objects/history', baseUrlConstantRef);
@@ -842,6 +791,62 @@ function buildHistoryResponseSample(objectType: ObjectType, valuePayload: unknow
 // schema declares type='integer'. Prevents Mendix from inferring Decimal for Integer fields
 // in the JSON Write structure, which would cause an Integer↔Decimal type mismatch in the
 // generated export mapping.
+function tagResponseValueFromSchema(
+    value: unknown,
+    properties: Record<string, AnyProperty> | null,
+    defs: Record<string, unknown>
+): unknown {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
+    return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, childValue]) => {
+            const property = properties?.[key] as AnyProperty | undefined;
+            let childProperties: Record<string, AnyProperty> | null = null;
+            if (property && isGroupProperty(property)) {
+                childProperties = property.properties as Record<string, AnyProperty>;
+            } else if (property && '$ref' in property && typeof (property as LeafProperty).$ref === 'string') {
+                const refKey = ((property as LeafProperty).$ref as string).replace('#/$defs/', '');
+                const resolved = defs[refKey];
+                if (resolved && typeof resolved === 'object' && 'properties' in resolved) {
+                    childProperties = (resolved as ObjectTypeSchema).properties as Record<string, AnyProperty>;
+                }
+            }
+            if (childValue !== null && typeof childValue === 'object' && !Array.isArray(childValue)) {
+                return [key, tagResponseValueFromSchema(childValue, childProperties, defs)];
+            }
+            if (typeof childValue === 'number' && Number.isFinite(childValue) && Number.isInteger(childValue)) {
+                const leafType = (property as LeafProperty | undefined)?.type;
+                if (leafType !== 'integer') return [key, `${DECIMAL_WRITE_MARKER}${childValue.toFixed(1)}`];
+            }
+            return [key, childValue];
+        })
+    );
+}
+
+function stringifySchemaAwareResponse(value: unknown): string {
+    return JSON.stringify(value, null, 2).replace(
+        new RegExp(`"${DECIMAL_WRITE_MARKER}(-?(?:0|[1-9]\\d*)\\.0)"`, 'g'),
+        '$1'
+    );
+}
+
+function buildSchemaAwareHistorySnippet(objectType: ObjectType, valuePayload: unknown): string {
+    const defs = (objectType.schema.$defs ?? {}) as Record<string, unknown>;
+    const taggedValue = tagResponseValueFromSchema(valuePayload, objectType.schema.properties ?? {}, defs);
+    return stringifySchemaAwareResponse(buildHistoryResponseSample(objectType, taggedValue));
+}
+
+function buildSchemaAwareSubscriptionSnippet(valuePayload: unknown, schema: ObjectTypeSchema): string {
+    const defs = (schema.$defs ?? {}) as Record<string, unknown>;
+    const taggedValue = tagResponseValueFromSchema(valuePayload, schema.properties ?? {}, defs);
+    return stringifySchemaAwareResponse({
+        success: true,
+        result: [{
+            sequenceNumber: 1,
+            updates: [{ elementId: 'example-element', value: taggedValue, quality: 'Good', timestamp: '2026-01-01T00:00:00Z' }],
+        }],
+    });
+}
+
 function buildSchemaAwareWriteSnippet(
     requestBody: Record<string, unknown>,
     valueSchema: ObjectTypeSchema
@@ -924,7 +929,7 @@ function fixMappingElements(
     for (const el of elements) {
         el.objectHandling = objectHandling;
 
-        if (parentEntityQualifiedName !== null && el.entity) {
+        if (parentEntityQualifiedName && el.entity) {
             const parentEntityName = parentEntityQualifiedName.split('.').pop() ?? '';
             const childEntityName = el.entity.split('.').pop() ?? '';
             el.association = `${IMPLEMENTATION_MODULE}.${parentEntityName}_${childEntityName}`;
@@ -932,10 +937,11 @@ function fixMappingElements(
             el.association = null;
         }
 
+        const childHandling = objectHandling === 'Parameter' && el.entity ? 'Find' : objectHandling;
         fixMappingElements(
             el.children.filter((c): c is Mappings.ObjectMappingElement => 'children' in c),
             el.entity,
-            objectHandling === 'Parameter' ? 'Find' : objectHandling
+            childHandling
         );
     }
 }
@@ -1227,6 +1233,11 @@ export interface WriteMicroflowResult {
     exportMappingCreated: boolean;
 }
 
+interface ImportMappingResult {
+    created: boolean;
+    mappingId: string;
+}
+
 export interface SubscriptionArtifactsResult {
     subscriptionEntityName: string;
     batchEntityName: string;
@@ -1237,13 +1248,7 @@ export interface SubscriptionArtifactsResult {
     microflowsCreated: number;
 }
 
-interface SubscriptionEntityNames {
-    subscription: string;
-    batch: string;
-    update: string;
-}
-
-async function ensureSubscriptionEntities(baseEntityName: string): Promise<SubscriptionEntityNames> {
+async function ensureSubscriptionEntities(baseEntityName: string): Promise<SubscriptionArtifactNames> {
     const sp = getStudioPro();
     const domainModel = await getDomainModelOrThrow();
     const startY = computeEntityStartY(domainModel);
@@ -1286,55 +1291,34 @@ async function ensureSubscriptionEntities(baseEntityName: string): Promise<Subsc
     return { subscription: subscription.entityName, batch: batch.entityName, update: update.entityName };
 }
 
-async function addStringParameter(
+async function addMicroflowParameters(
     microflow: Microflows.Microflow,
-    name: string,
-    x: number
+    parameters: Array<{ name: string; type?: 'String' | 'DateTime'; entityQualifiedName?: string }>
 ): Promise<void> {
-    const parameter = await getStudioPro().app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        { name, type: 'String' }
-    );
-    parameter.size = { width: 30, height: 30 };
-    parameter.relativeMiddlePoint = { x, y: 0 };
-    microflow.objectCollection.objects.push(parameter);
+    const sp = getStudioPro();
+    for (const [index, parameter] of parameters.entries()) {
+        const parameterObject = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
+            'Microflows$MicroflowParameterObject',
+            parameter.entityQualifiedName
+                ? { name: parameter.name, type: 'Object', entity: parameter.entityQualifiedName }
+                : { name: parameter.name, type: parameter.type ?? 'String' }
+        );
+        parameterObject.size = { width: 30, height: 30 };
+        parameterObject.relativeMiddlePoint = { x: 100 + index * 100, y: 0 };
+        microflow.objectCollection.objects.push(parameterObject);
+    }
 }
 
-async function createSubscriptionRestMicroflow(options: {
-    name: string;
-    endpoint: string;
-    parameters: Array<{ name: string; entityQualifiedName?: string }>;
-    requestBody: string;
-    requestBodyArgs: string[];
+async function createSubscriptionRestMicroflow(options: SubscriptionRestDefinition & {
     baseUrlConstantRef: string;
     authRefs: Awaited<ReturnType<typeof ensureEndpointConstants>>['authRefs'];
     endpointFolderId: string;
-    importMappingName?: string;
-    output?: { variableName: string; entityName: string; isList: boolean };
-    commitImportedResult?: boolean;
-    annotationText?: string;
 }): Promise<boolean> {
     const sp = getStudioPro();
-    const existing = await sp.app.model.microflows.loadAll(
-        unit => unit.moduleName === IMPLEMENTATION_MODULE && unit.name === options.name,
-        1
-    );
-    if (existing.length > 0) return false;
+    if (await findMicroflow(options.name)) return false;
 
     const microflow = await sp.app.model.microflows.addMicroflow(options.endpointFolderId, { name: options.name }, false);
-    for (const [index, parameter] of options.parameters.entries()) {
-        if (parameter.entityQualifiedName) {
-            const objectParameter = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-                'Microflows$MicroflowParameterObject',
-                { name: parameter.name, type: 'Object', entity: parameter.entityQualifiedName }
-            );
-            objectParameter.size = { width: 30, height: 30 };
-            objectParameter.relativeMiddlePoint = { x: 100 + index * 100, y: 0 };
-            microflow.objectCollection.objects.push(objectParameter);
-        } else {
-            await addStringParameter(microflow, parameter.name, 100 + index * 100);
-        }
-    }
+    await addMicroflowParameters(microflow, options.parameters);
     await populateMicroflowWithRestCall(sp, microflow, {
         url: buildRestLocationTemplate(options.endpoint, options.baseUrlConstantRef).text,
         urlArgs: [options.baseUrlConstantRef],
@@ -1371,28 +1355,13 @@ async function createSubscriptionSyncMicroflow(options: {
     outputEntityName: string;
 }): Promise<boolean> {
     const sp = getStudioPro();
-    const existing = await sp.app.model.microflows.loadAll(
-        unit => unit.moduleName === IMPLEMENTATION_MODULE && unit.name === options.name,
-        1
-    );
-    if (existing.length > 0) return false;
+    if (await findMicroflow(options.name)) return false;
 
     const microflow = await sp.app.model.microflows.addMicroflow(options.endpointFolderId, { name: options.name }, false);
     const subscriptionQualifiedName = `${IMPLEMENTATION_MODULE}.${options.subscriptionEntityName}`;
-    const subscriptionParameter = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        { name: 'Subscription', type: 'Object', entity: subscriptionQualifiedName }
-    );
-    subscriptionParameter.size = { width: 30, height: 30 };
-    subscriptionParameter.relativeMiddlePoint = { x: 100, y: 0 };
-    microflow.objectCollection.objects.push(subscriptionParameter);
+    await addMicroflowParameters(microflow, [{ name: 'Subscription', entityQualifiedName: subscriptionQualifiedName }]);
     const lastSequenceNumberMember = `${subscriptionQualifiedName}.lastSequenceNumber`;
-    // Mendix expressions must use unqualified object member paths here. Keep the
-    // constant qualified, but use $Subscription/attribute for entity members.
-    const requestBodyExpression =
-        `if $Subscription/lastSequenceNumber != empty\n` +
-        `then '{"clientId":"' + ${options.subscriptionClientIdConstantRef} + '","subscriptionId":"' + $Subscription/subscriptionId + '","lastSequenceNumber":' + $Subscription/lastSequenceNumber + '}'\n` +
-        `else '{"clientId":"' + ${options.subscriptionClientIdConstantRef} + '","subscriptionId":"' + $Subscription/subscriptionId + '}'`;
+    const requestBodyExpression = buildSubscriptionSyncRequestExpression(options.subscriptionClientIdConstantRef);
     await populateMicroflowWithRestCall(sp, microflow, {
         url: buildRestLocationTemplate('/subscriptions/sync', options.baseUrlConstantRef).text,
         urlArgs: [options.baseUrlConstantRef],
@@ -1425,8 +1394,8 @@ export async function createSubscriptionArtifacts(
     connection: ConnectionConfig
 ): Promise<SubscriptionArtifactsResult> {
     const baseEntityName = toModelName(objectType.displayName);
-    const { baseUrlConstantRef, subscriptionClientIdConstantRef, authRefs, endpointFolderId } = await ensureEndpointConstants(connection);
-    const { objectTypeFolderId, mappingsFolderId } = await ensureObjectTypeFolders(endpointFolderId, baseEntityName);
+    const { baseUrlConstantRef, subscriptionClientIdConstantRef, authRefs, objectTypeFolderId, mappingsFolderId } =
+        await ensureObjectTypeArtifactContext(connection, baseEntityName);
     const entityNames = await ensureSubscriptionEntities(baseEntityName);
 
     const createJsonName = `JSON_Subscription_${baseEntityName}`;
@@ -1462,13 +1431,7 @@ export async function createSubscriptionArtifacts(
 
     const syncJsonName = `JSON_SubscriptionSync_${baseEntityName}`;
     const syncMappingName = `IM_SubscriptionSync_${baseEntityName}`;
-    const syncSnippet = stringifyJsonWithDecimalIntegers({
-        success: true,
-        result: [{
-            sequenceNumber: 1,
-            updates: [{ elementId: 'example-element', value: valuePayload, quality: 'Good', timestamp: '2026-01-01T00:00:00Z' }],
-        }],
-    });
+    const syncSnippet = buildSchemaAwareSubscriptionSnippet(valuePayload, objectType.schema);
     const syncJson = await createOrUpdateJsonStructure(syncJsonName, syncSnippet, mappingsFolderId);
     const batchPath = `${OBJECT_PATH}|result|${OBJECT_PATH}`;
     const updatePath = `${batchPath}|updates|${OBJECT_PATH}`;
@@ -1501,39 +1464,12 @@ export async function createSubscriptionArtifacts(
         mappingsFolderId
     );
 
-    const definitions = [
-        {
-            name: `MF_${baseEntityName}_SubscribeCreate`, endpoint: '/subscriptions',
-            parameters: [{ name: 'DisplayName' }],
-            requestBody: '{{"clientId":"{1}","displayName":"{2}"}',
-            requestBodyArgs: [subscriptionClientIdConstantRef, '$DisplayName'], importMappingName: createMappingName,
-            output: { variableName: 'Subscription', entityName: entityNames.subscription, isList: false },
-            commitImportedResult: true,
-        },
-        {
-            name: `MF_${baseEntityName}_SubscribeRegister`, endpoint: '/subscriptions/register',
-            parameters: [{
-                name: 'Subscription',
-                entityQualifiedName: `${IMPLEMENTATION_MODULE}.${entityNames.subscription}`,
-            }],
-            requestBody: '{{"clientId":"{1}","subscriptionId":"{2}","elementIds":["{3}"],"maxDepth":1}',
-            requestBodyArgs: [
-                subscriptionClientIdConstantRef,
-                '$Subscription/subscriptionId',
-                '$Subscription/elementId',
-            ],
-            annotationText: 'Set Subscription.elementId before calling this microflow. Register reads the existing value and does not choose an element ID.',
-        },
-        {
-            name: `MF_${baseEntityName}_Unsubscribe`, endpoint: '/subscriptions/delete',
-            parameters: [{
-                name: 'Subscription',
-                entityQualifiedName: `${IMPLEMENTATION_MODULE}.${entityNames.subscription}`,
-            }],
-            requestBody: '{{"clientId":"{1}","subscriptionIds":["{2}"]}',
-            requestBodyArgs: [subscriptionClientIdConstantRef, '$Subscription/subscriptionId'],
-        },
-    ];
+    const definitions: SubscriptionRestDefinition[] = buildSubscriptionRestDefinitions(
+        baseEntityName,
+        entityNames,
+        subscriptionClientIdConstantRef,
+        createMappingName
+    );
 
     const syncMicroflowName = `MF_${baseEntityName}_SubscribeSync`;
     let microflowsCreated = Number(await createSubscriptionSyncMicroflow({
@@ -1571,10 +1507,9 @@ export async function createWriteMicroflow(
     connection: ConnectionConfig
 ): Promise<WriteMicroflowResult> {
     const sp = getStudioPro();
-    const { baseUrlConstantRef, authRefs, endpointFolderId } = await ensureEndpointConstants(connection);
-
     const baseEntityName = toModelName(objectType.displayName);
-    const { objectTypeFolderId, mappingsFolderId } = await ensureObjectTypeFolders(endpointFolderId, baseEntityName);
+    const { baseUrlConstantRef, authRefs, objectTypeFolderId, mappingsFolderId } =
+        await ensureObjectTypeArtifactContext(connection, baseEntityName);
     const microflowName = `MF_${baseEntityName}_Write`;
     const exportMappingName = `EM_Write_${baseEntityName}`;
 
@@ -1641,25 +1576,10 @@ export async function createWriteMicroflow(
 
     const microflow = await sp.app.model.microflows.addMicroflow(objectTypeFolderId, { name: microflowName }, false);
 
-    const elementIdParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        { name: 'ElementId', type: 'String' }
-    );
-    elementIdParam.size = { width: 30, height: 30 };
-    elementIdParam.relativeMiddlePoint = { x: 100, y: 0 };
-    microflow.objectCollection.objects.push(elementIdParam);
-
-    const inputParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        {
-            name: 'InputObject',
-            type: 'Object',
-            entity: `${IMPLEMENTATION_MODULE}.${baseEntityName}`,
-        }
-    );
-    inputParam.size = { width: 30, height: 30 };
-    inputParam.relativeMiddlePoint = { x: 200, y: 0 };
-    microflow.objectCollection.objects.push(inputParam);
+    await addMicroflowParameters(microflow, [
+        { name: 'ElementId' },
+        { name: 'InputObject', entityQualifiedName: `${IMPLEMENTATION_MODULE}.${baseEntityName}` },
+    ]);
 
     const locationTemplate = buildRestLocationTemplate('/objects/{2}/value', baseUrlConstantRef, ['$ElementId']);
     await populateMicroflowWithRestCall(sp, microflow, {
@@ -1724,13 +1644,7 @@ export async function createObjectsListMicroflow(
     }
 
     const microflow = await sp.app.model.microflows.addMicroflow(endpointFolderId, { name: microflowName }, false);
-    const objectTypeParam = await sp.app.model.microflows.createElement<Microflows.MicroflowParameterObject>(
-        'Microflows$MicroflowParameterObject',
-        { name: 'ObjectType', type: 'String' }
-    );
-    objectTypeParam.size = { width: 30, height: 30 };
-    objectTypeParam.relativeMiddlePoint = { x: 100, y: 0 };
-    microflow.objectCollection.objects.push(objectTypeParam);
+    await addMicroflowParameters(microflow, [{ name: 'ObjectType' }]);
 
     const locationTemplate = buildRestLocationTemplate('/objects?typeElementId={2}', baseUrlConstantRef, ['$ObjectType']);
     await populateMicroflowWithRestCall(sp, microflow, {

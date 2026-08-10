@@ -78,6 +78,48 @@ function inferPropertyFromSample(value: unknown): AnyProperty {
     return { type: 'string' };
 }
 
+function resolveDeclaredProperty(property: AnyProperty, defs: Record<string, unknown>): AnyProperty {
+    if ('$ref' in property && typeof (property as LeafProperty).$ref === 'string') {
+        const key = ((property as LeafProperty).$ref as string).replace('#/$defs/', '');
+        const resolved = defs[key];
+        if (resolved && typeof resolved === 'object') return resolved as AnyProperty;
+    }
+    return property;
+}
+
+function applyDeclaredTypes(
+    inferred: AnyProperty,
+    declared: AnyProperty | undefined,
+    defs: Record<string, unknown>
+): AnyProperty {
+    if (!declared) return inferred;
+    const resolved = resolveDeclaredProperty(declared, defs);
+    if (isGroupProperty(inferred) && isGroupProperty(resolved)) {
+        const declaredProperties = resolved.properties as Record<string, AnyProperty>;
+        return {
+            ...inferred,
+            properties: Object.fromEntries(
+                Object.entries(inferred.properties).map(([key, child]) => [
+                    key,
+                    applyDeclaredTypes(child as AnyProperty, declaredProperties[key], defs),
+                ])
+            ),
+        };
+    }
+    if (isArrayProperty(inferred) && isArrayProperty(resolved)) {
+        return {
+            ...inferred,
+            items: applyDeclaredTypes(inferred.items as AnyProperty, resolved.items as AnyProperty, defs),
+        };
+    }
+    const declaredLeaf = resolved as LeafProperty;
+    return {
+        ...inferred,
+        type: declaredLeaf.type ?? (inferred as LeafProperty).type,
+        ...(declaredLeaf.format ? { format: declaredLeaf.format } : {}),
+    } as AnyProperty;
+}
+
 function normalizeSampleForMapping(sample: unknown): Record<string, unknown> {
     if (sample !== null && typeof sample === 'object' && !Array.isArray(sample)) {
         return sample as Record<string, unknown>;
@@ -194,9 +236,22 @@ export function buildSyntheticValueResponse(objectType: ObjectType): { rawText: 
     return { rawText: JSON.stringify(parsed), parsed };
 }
 
-export function buildObjectTypeFromSample(displayName: string, sample: unknown): ObjectType {
+export function buildObjectTypeFromSample(
+    displayName: string,
+    sample: unknown,
+    declaredSchema?: ObjectTypeSchema
+): ObjectType {
     const normalizedSample = normalizeSampleForMapping(sample);
     const rootProperty = inferPropertyFromSample(normalizedSample);
+    const inferredProperties = isGroupProperty(rootProperty) ? rootProperty.properties : { value: rootProperty };
+    const declaredProperties = declaredSchema?.properties ?? {};
+    const defs = (declaredSchema?.$defs ?? {}) as Record<string, unknown>;
+    const properties = Object.fromEntries(
+        Object.entries(inferredProperties).map(([key, property]) => [
+            key,
+            applyDeclaredTypes(property as AnyProperty, declaredProperties[key] as AnyProperty | undefined, defs),
+        ])
+    );
 
     return {
         elementId: '',
@@ -204,7 +259,7 @@ export function buildObjectTypeFromSample(displayName: string, sample: unknown):
         namespaceUri: '',
         schema: {
             type: 'object',
-            properties: isGroupProperty(rootProperty) ? rootProperty.properties : { value: rootProperty },
+            properties,
         },
     };
 }
