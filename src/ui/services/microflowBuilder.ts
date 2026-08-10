@@ -1,4 +1,4 @@
-import type { DataTypes, Microflows, Primitives, StudioProApi, Texts } from '@mendix/extensions-api';
+import type { DataTypes, Microflows, Primitives, StudioProApi } from '@mendix/extensions-api';
 import { configureHttpAuthForMicroflow, type AuthConstantRefs } from './auth';
 
 export interface RestMicroflowOptions {
@@ -6,6 +6,7 @@ export interface RestMicroflowOptions {
     urlArgs?: string[];
     requestBody: string;
     requestBodyArgs?: string[];
+    requestBodyVariable?: { name: string; expression: string };
     extraHeaders?: Array<{ key: string; value: string }>;
     authRefs: AuthConstantRefs;
     importMappingQualifiedName?: string;
@@ -21,6 +22,14 @@ export interface RestMicroflowOptions {
     };
     annotationText?: string;
     returnMappedResult?: boolean;
+    commitImportedResult?: boolean;
+    persistMaxSequence?: {
+        inputListVariableName: string;
+        sequenceAttribute: string;
+        outputVariableName: string;
+        targetObjectVariableName: string;
+        targetAttribute: string;
+    };
 }
 
 export function buildValueQueryHttpRequestBody(selectedElementId: string): string {
@@ -123,28 +132,14 @@ async function createMessageActivity(
     sp: StudioProApi,
     type: Microflows.ShowMessageType,
     messageText: string,
-    expressionArgs: string[],
-    languageCode: string
+    expressionArgs: string[]
 ): Promise<Microflows.ActionActivity> {
     const messageActivity = await createMicroflowElement<Microflows.ActionActivity>(sp, 'Microflows$ActionActivity');
-    const showMessage = await createMicroflowElement<Microflows.ShowMessageAction>(sp, 'Microflows$ShowMessageAction');
-    const textTemplate = await createMicroflowElement<Microflows.TextTemplate>(sp, 'Microflows$TextTemplate');
-    const text = await createMicroflowElement<Texts.Text>(sp, 'Texts$Text');
-    const translation = await createMicroflowElement<Texts.Translation>(sp, 'Texts$Translation');
-
-    for (const arg of expressionArgs) {
-        const templateArg = await createMicroflowElement<Microflows.TemplateArgument>(sp, 'Microflows$TemplateArgument');
-        templateArg.expression = arg;
-        textTemplate.arguments.push(templateArg);
-    }
-
-    translation.languageCode = languageCode;
-    translation.text = messageText;
-    text.translations.push(translation);
-
-    textTemplate.text = text;
-    showMessage.type = type;
-    showMessage.template = textTemplate;
+    const showMessage = await createMicroflowElement<Microflows.ShowMessageAction>(
+        sp,
+        'Microflows$ShowMessageAction',
+        { type, template: { text: messageText, arguments: expressionArgs } }
+    );
     messageActivity.action = showMessage;
     return messageActivity;
 }
@@ -156,14 +151,11 @@ async function createLogMessageActivity(
 ): Promise<Microflows.ActionActivity> {
     const activity = await createMicroflowElement<Microflows.ActionActivity>(sp, 'Microflows$ActionActivity');
     const logAction = await createMicroflowElement<Microflows.LogMessageAction>(sp, 'Microflows$LogMessageAction');
-    const template = await createMicroflowElement<Microflows.StringTemplate>(sp, 'Microflows$StringTemplate');
-
-    template.text = messageText;
-    for (const argExpr of expressionArgs) {
-        const arg = await createMicroflowElement<Microflows.TemplateArgument>(sp, 'Microflows$TemplateArgument');
-        arg.expression = argExpr;
-        template.arguments.push(arg);
-    }
+    const template = await createMicroflowElement<Microflows.StringTemplate>(
+        sp,
+        'Microflows$StringTemplate',
+        { text: messageText, arguments: expressionArgs }
+    );
 
     logAction.messageTemplate = template;
     logAction.level = 'Error';
@@ -261,7 +253,8 @@ async function buildImportBranch(
     sp: StudioProApi,
     microflow: Microflows.Microflow,
     importMappingQualifiedName: string,
-    importMappingOutput: NonNullable<RestMicroflowOptions['importMappingOutput']>
+    importMappingOutput: NonNullable<RestMicroflowOptions['importMappingOutput']>,
+    commitImportedResult: boolean
 ): Promise<string> {
     const importActivity = await createMicroflowElement<Microflows.ActionActivity>(sp, 'Microflows$ActionActivity');
     const importXmlAction = await createMicroflowElement<Microflows.ImportXmlAction>(sp, 'Microflows$ImportXmlAction');
@@ -273,7 +266,7 @@ async function buildImportBranch(
     )) as Microflows.ResultHandling['variableType'];
 
     importRange.singleObject = !importMappingOutput.isList;
-    importMappingCall.commit = 'No';
+    importMappingCall.commit = commitImportedResult ? 'Yes' : 'No';
     importMappingCall.contentType = 'Json';
     importMappingCall.forceSingleOccurrence = false; // Don't change this, it will make the import mapping fail silently.
     importMappingCall.mapping = importMappingQualifiedName;
@@ -310,6 +303,7 @@ export async function populateMicroflowWithRestCall(
         urlArgs = [],
         requestBody,
         requestBodyArgs = [],
+        requestBodyVariable,
         extraHeaders = [],
         authRefs,
         importMappingQualifiedName,
@@ -317,6 +311,8 @@ export async function populateMicroflowWithRestCall(
         exportMapping,
         annotationText,
         returnMappedResult,
+        commitImportedResult = false,
+        persistMaxSequence,
     } = options;
     const shouldImportResponse = Boolean(importMappingQualifiedName && importMappingOutput);
 
@@ -327,10 +323,25 @@ export async function populateMicroflowWithRestCall(
     const stringType = await createMicroflowElement<DataTypes.StringType>(sp, 'DataTypes$StringType');
 
     let exportActivityId: string | null = null;
+    let requestBodyVariableActivityId: string | null = null;
     if (exportMapping) {
         exportActivityId = await buildExportRequestBranch(sp, microflow, restCall, exportMapping);
     } else {
         await buildCustomRequestBody(sp, restCall, requestBody, requestBodyArgs);
+    }
+
+    if (requestBodyVariable) {
+        const variableActivity = await createMicroflowElement<Microflows.ActionActivity>(sp, 'Microflows$ActionActivity');
+        const createVariable = await createMicroflowElement<Microflows.CreateVariableAction>(
+            sp,
+            'Microflows$CreateVariableAction',
+            { variableName: requestBodyVariable.name, variableType: 'String', initialValue: requestBodyVariable.expression }
+        );
+        variableActivity.action = createVariable;
+        variableActivity.size = { width: 120, height: 60 };
+        variableActivity.relativeMiddlePoint = { x: 240, y: 200 };
+        microflow.objectCollection.objects.push(variableActivity);
+        requestBodyVariableActivityId = variableActivity.$ID;
     }
 
     httpConfiguration.overrideLocation = true;
@@ -386,12 +397,62 @@ export async function populateMicroflowWithRestCall(
     }
 
     const importActivityId = importMappingQualifiedName && importMappingOutput
-        ? await buildImportBranch(sp, microflow, importMappingQualifiedName, importMappingOutput)
+        ? await buildImportBranch(sp, microflow, importMappingQualifiedName, importMappingOutput, commitImportedResult)
         : null;
+
+    let aggregateActivityId: string | null = null;
+    let updateCursorActivityId: string | null = null;
+    if (importActivityId && persistMaxSequence) {
+        const aggregateActivity = await createMicroflowElement<Microflows.ActionActivity>(sp, 'Microflows$ActionActivity');
+        const aggregateAction = await createMicroflowElement<Microflows.AggregateListAction>(
+            sp,
+            'Microflows$AggregateListAction',
+            {
+                attribute: persistMaxSequence.sequenceAttribute,
+                expression: '',
+                function: 'Maximum',
+                inputVariableName: persistMaxSequence.inputListVariableName,
+                outputVariableName: persistMaxSequence.outputVariableName,
+            }
+        );
+        aggregateActivity.action = aggregateAction;
+        aggregateActivity.size = { width: 120, height: 60 };
+        aggregateActivity.relativeMiddlePoint = { x: 900, y: 200 };
+        microflow.objectCollection.objects.push(aggregateActivity);
+        aggregateActivityId = aggregateActivity.$ID;
+
+        const updateActivity = await createMicroflowElement<Microflows.ActionActivity>(sp, 'Microflows$ActionActivity');
+        const changeObject = await createMicroflowElement<Microflows.ChangeObjectAction>(sp, 'Microflows$ChangeObjectAction');
+        const memberChange = await createMicroflowElement<Microflows.MemberChange>(sp, 'Microflows$MemberChange');
+        memberChange.attribute = persistMaxSequence.targetAttribute;
+        memberChange.type = 'Set';
+        memberChange.value =
+            `if $${persistMaxSequence.outputVariableName} != empty ` +
+            `then formatDecimal($${persistMaxSequence.outputVariableName}, '0') ` +
+            `else $${persistMaxSequence.targetObjectVariableName}/${persistMaxSequence.targetAttribute.split('.').at(-1)}`;
+        changeObject.changeVariableName = persistMaxSequence.targetObjectVariableName;
+        changeObject.commit = 'Yes';
+        changeObject.refreshInClient = false;
+        changeObject.items = [memberChange];
+        updateActivity.action = changeObject;
+        updateActivity.size = { width: 120, height: 60 };
+        updateActivity.relativeMiddlePoint = { x: 1040, y: 200 };
+        microflow.objectCollection.objects.push(updateActivity);
+        updateCursorActivityId = updateActivity.$ID;
+
+        const cursorAnnotation = await createMicroflowElement<Microflows.Annotation>(sp, 'Microflows$Annotation', {
+            caption: 'Validate and apply every returned batch before updating lastSequenceNumber. Only acknowledge data that was processed successfully.',
+            relativeMiddlePoint: { x: 1040, y: 80 },
+            size: { width: 320, height: 80 },
+        });
+        microflow.objectCollection.objects.push(cursorAnnotation);
+        microflow.flows.push(await createAnnotationFlow(sp, cursorAnnotation.$ID, updateActivity.$ID, 2, 0));
+    }
 
     const exclusiveSplit = await createMicroflowElement<Microflows.ExclusiveSplit>(sp, 'Microflows$ExclusiveSplit');
     const splitCondition = await createMicroflowElement<Microflows.ExpressionSplitCondition>(sp, 'Microflows$ExpressionSplitCondition');
-    splitCondition.expression = '$latestHttpResponse/StatusCode = 200';
+    splitCondition.expression =
+        '$latestHttpResponse/StatusCode >= 200 and $latestHttpResponse/StatusCode < 300';
     exclusiveSplit.splitCondition = splitCondition;
     exclusiveSplit.size = { width: 60, height: 60 };
     exclusiveSplit.relativeMiddlePoint = { x: 600, y: 200 };
@@ -408,7 +469,7 @@ export async function populateMicroflowWithRestCall(
             ? { returnValue: `$${importMappingOutput.outputVariableName}` }
             : {}
     );
-    endEvent.relativeMiddlePoint = { x: importActivityId ? 1100 : 900, y: 200 };
+    endEvent.relativeMiddlePoint = { x: updateCursorActivityId ? 1360 : importActivityId ? 1100 : 900, y: 200 };
     microflow.objectCollection.objects.push(endEvent);
 
     if (returnMappedResult && importMappingOutput) {
@@ -423,6 +484,9 @@ export async function populateMicroflowWithRestCall(
     if (exportActivityId) {
         microflow.flows.push(await createSequenceFlow(sp, startEvent.$ID, exportActivityId));
         microflow.flows.push(await createSequenceFlow(sp, exportActivityId, actionActivity.$ID));
+    } else if (requestBodyVariableActivityId) {
+        microflow.flows.push(await createSequenceFlow(sp, startEvent.$ID, requestBodyVariableActivityId));
+        microflow.flows.push(await createSequenceFlow(sp, requestBodyVariableActivityId, actionActivity.$ID));
     } else {
         microflow.flows.push(await createSequenceFlow(sp, startEvent.$ID, actionActivity.$ID));
     }
@@ -437,16 +501,21 @@ export async function populateMicroflowWithRestCall(
         shouldImportResponse
             ? 'Successfully received and mapped response from i3X API.'
             : 'Successfully received response from i3X API. Response: {1}',
-        shouldImportResponse ? [] : ['$ResponseBody'],
-        'en_US'
+        shouldImportResponse ? [] : ['$ResponseBody']
     );
     successActivity.size = { width: 120, height: 60 };
-    successActivity.relativeMiddlePoint = { x: importActivityId ? 960 : 800, y: 200 };
+    successActivity.relativeMiddlePoint = { x: updateCursorActivityId ? 1200 : importActivityId ? 960 : 800, y: 200 };
     microflow.objectCollection.objects.push(successActivity);
 
     if (importActivityId) {
         microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, importActivityId, true));
-        microflow.flows.push(await createSequenceFlow(sp, importActivityId, successActivity.$ID));
+        if (aggregateActivityId && updateCursorActivityId) {
+            microflow.flows.push(await createSequenceFlow(sp, importActivityId, aggregateActivityId));
+            microflow.flows.push(await createSequenceFlow(sp, aggregateActivityId, updateCursorActivityId));
+            microflow.flows.push(await createSequenceFlow(sp, updateCursorActivityId, successActivity.$ID));
+        } else {
+            microflow.flows.push(await createSequenceFlow(sp, importActivityId, successActivity.$ID));
+        }
         microflow.flows.push(await createSequenceFlow(sp, successActivity.$ID, endEvent.$ID));
     } else {
         microflow.flows.push(await createSequenceFlow(sp, exclusiveSplit.$ID, successActivity.$ID, true));
@@ -458,8 +527,7 @@ export async function populateMicroflowWithRestCall(
         sp,
         'Error',
         'Error: Received status code {1} from i3X API.',
-        ['toString($latestHttpResponse/StatusCode)'],
-        'en_US'
+        ['toString($latestHttpResponse/StatusCode)']
     );
     errorActivity.size = { width: 120, height: 60 };
     errorActivity.relativeMiddlePoint = { x: errorX, y: 300 };
