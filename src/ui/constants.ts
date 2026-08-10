@@ -5,6 +5,7 @@ export const CONSTANT_API_BASE_URL = 'API_BaseUrl';
 export const CONSTANT_API_USERNAME = 'API_Username';
 export const CONSTANT_API_PASSWORD = 'API_Password';
 export const CONSTANT_API_TOKEN = 'API_Token';
+export const CONSTANT_SUBSCRIPTION_CLIENT_ID = 'SubscriptionClientId';
 
 // Markers used during JSON serialization to preserve decimal representation
 export const DECIMAL_WRITE_MARKER = '__I3X_DECIMAL_WRITE__';

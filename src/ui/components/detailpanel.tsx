@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ComponentContext, getStudioProApi, StudioProApi } from '@mendix/extensions-api';
 import styles from '../index.module.css';
 import { ObjectType, AnyProperty, ConnectionConfig, isGroupProperty, isArrayProperty, extractArrayItemProperties, shortNs } from '../types';
-import { createQueryValuesMicroflow, createHistoryMicroflow, createWriteMicroflow, checkValueQueryEntitiesExist, summarizeArtifactResult } from '../services/studioProService';
+import { createQueryValuesMicroflow, createHistoryMicroflow, createWriteMicroflow, createSubscriptionArtifacts, checkValueQueryEntitiesExist, summarizeArtifactResult } from '../services/studioProService';
 import { getObjectsUrl, unwrapI3xResult } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
 import { GroupSection, type RefResolver, type ComponentTypeResolver } from './SchemaTree';
@@ -50,6 +50,7 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
     const [isCreatingQuery, setIsCreatingQuery] = useState(false);
     const [isCreatingHistory, setIsCreatingHistory] = useState(false);
     const [isCreatingWrite, setIsCreatingWrite] = useState(false);
+    const [isCreatingSubscription, setIsCreatingSubscription] = useState(false);
     const [writeEntitiesExist, setWriteEntitiesExist] = useState(false);
     const [retrievedObjects, setRetrievedObjects] = useState<unknown[]>([]);
     const [objectsLoadError, setObjectsLoadError] = useState<string | null>(null);
@@ -262,6 +263,19 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
         });
     };
 
+    const handleCreateSubscription = async () => {
+        if (!writeEntitiesExist || isCreatingSubscription) return;
+
+        await runArtifactAction(studioPro, setIsCreatingSubscription, 'Could not create subscription artifacts', async () => {
+            const result = await createSubscriptionArtifacts(item, connection);
+            await studioPro.ui.notifications.show({
+                title: result.microflowsCreated > 0 ? 'Subscription artifacts prepared' : 'Subscription artifacts already exist',
+                message: `${result.microflowsCreated} of ${result.microflowNames.length} microflows created. State entity: '${result.subscriptionEntityName}'.`,
+                displayDurationInSeconds: 10,
+            });
+        });
+    };
+
     const noObjects = !isLoadingObjects && retrievedObjects.length === 0;
     const btnClass = noObjects
         ? `${styles.actionButton} ${styles.actionButtonWarning}`
@@ -299,6 +313,14 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                         title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
                     >
                         {isCreatingWrite ? 'Creating...' : 'Writeback'}
+                    </button>
+                    <button
+                        className={btnClass}
+                        onClick={handleCreateSubscription}
+                        disabled={!writeEntitiesExist || isCreatingSubscription}
+                        title={!writeEntitiesExist ? 'Create Latest Values first.' : undefined}
+                    >
+                        {isCreatingSubscription ? 'Creating...' : 'Subscribe'}
                     </button>
                     <button className={styles.closeButton} onClick={onClose} title="Close">✕</button>
                 </div>
