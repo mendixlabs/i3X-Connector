@@ -642,8 +642,8 @@ export async function createHistoryMicroflow(
         await ensureObjectTypeArtifactContext(connection, baseEntityName);
     const historyEntityName = `${baseEntityName}_History`;
     const microflowName = `MF_${baseEntityName}_History`;
-    const jsonStructureName = `JSON_History_${baseEntityName}`;
-    const importMappingName = `IM_History_${baseEntityName}`;
+    const jsonStructureName = `JSON_${baseEntityName}_History`;
+    const importMappingName = `IM_${baseEntityName}_History`;
 
     // Require value-query artifacts to exist first so we can reuse the sampled
     // latest-value payload when building the history entry shape.
@@ -1398,8 +1398,8 @@ export async function createSubscriptionArtifacts(
         await ensureObjectTypeArtifactContext(connection, baseEntityName);
     const entityNames = await ensureSubscriptionEntities(baseEntityName);
 
-    const createJsonName = `JSON_Subscription_${baseEntityName}`;
-    const createMappingName = `IM_Subscription_${baseEntityName}`;
+    const createJsonName = `JSON_${baseEntityName}_SubscribeCreate`;
+    const createMappingName = `IM_${baseEntityName}_SubscribeCreate`;
     const createSnippet = JSON.stringify({
         success: true,
         result: { clientId: 'mendix-client-id', subscriptionId: 'subscription-id', displayName: baseEntityName },
@@ -1429,8 +1429,8 @@ export async function createSubscriptionArtifacts(
         } catch { /* use the schema-derived payload */ }
     }
 
-    const syncJsonName = `JSON_SubscriptionSync_${baseEntityName}`;
-    const syncMappingName = `IM_SubscriptionSync_${baseEntityName}`;
+    const syncJsonName = `JSON_${baseEntityName}_SubscribeSync`;
+    const syncMappingName = `IM_${baseEntityName}_SubscribeSync`;
     const syncSnippet = buildSchemaAwareSubscriptionSnippet(valuePayload, objectType.schema);
     const syncJson = await createOrUpdateJsonStructure(syncJsonName, syncSnippet, mappingsFolderId);
     const batchPath = `${OBJECT_PATH}|result|${OBJECT_PATH}`;
@@ -1511,7 +1511,7 @@ export async function createWriteMicroflow(
     const { baseUrlConstantRef, authRefs, objectTypeFolderId, mappingsFolderId } =
         await ensureObjectTypeArtifactContext(connection, baseEntityName);
     const microflowName = `MF_${baseEntityName}_Write`;
-    const exportMappingName = `EM_Write_${baseEntityName}`;
+    const exportMappingName = `EM_${baseEntityName}_Write`;
 
     // Verify the base entity exists — the write microflow reuses entities created
     // by the last-known-values flow and must never create its own.
@@ -1525,7 +1525,7 @@ export async function createWriteMicroflow(
 
     // Official i3X write calls send a VQT body. We emit the required value field
     // and leave optional quality/timestamp fields unset.
-    const writeJsonStructureName = `JSON_Write_${baseEntityName}`;
+    const writeJsonStructureName = `JSON_${baseEntityName}_Write`;
     const rawStructures = await sp.app.model.jsonStructures.getUnitsInfo();
     const rawStructureInfo = rawStructures.find(
         u => u.moduleName === IMPLEMENTATION_MODULE && u.name === `JSON_${baseEntityName}`
