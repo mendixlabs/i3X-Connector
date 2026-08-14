@@ -15,6 +15,7 @@ export interface RestMicroflowOptions {
         entityQualifiedName: string;
         isList: boolean;
         inputVariableName?: string;
+        mappingArgumentVariableName?: string;
     };
     exportMapping?: {
         mappingQualifiedName: string;
@@ -270,6 +271,7 @@ async function buildImportBranch(
     importMappingCall.contentType = 'Json';
     importMappingCall.forceSingleOccurrence = false; // Don't change this, it will make the import mapping fail silently.
     importMappingCall.mapping = importMappingQualifiedName;
+    importMappingCall.mappingArgumentVariableName = importMappingOutput.mappingArgumentVariableName ?? '';
     importMappingCall.range = importRange;
 
     (importVariableType as { entity?: string }).entity = importMappingOutput.entityQualifiedName;

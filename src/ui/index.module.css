@@ -863,6 +863,179 @@
     border-bottom: none;
 }
 
+.relationshipExplorer {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--bg-card);
+}
+
+.relationshipMockBanner {
+    padding: 8px 12px;
+    color: #92400e;
+    background: rgba(245, 158, 11, 0.12);
+    border-bottom: 1px solid rgba(245, 158, 11, 0.25);
+    font-size: 12px;
+}
+
+.relationshipExplorerBody {
+    display: grid;
+    grid-template-columns: minmax(320px, 1.2fr) minmax(280px, 1fr);
+    min-height: 310px;
+}
+
+.relationshipTree {
+    border-right: 1px solid var(--border);
+}
+
+.relationshipTreeHeader {
+    display: flex;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+}
+
+.relationshipTreeHeader span {
+    color: var(--text-muted);
+}
+
+.relationshipNode {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 8px;
+    padding: 10px 12px;
+    color: var(--text-body);
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    cursor: pointer;
+}
+
+.relationshipNode:hover,
+.relationshipNodeSelected {
+    background: var(--bg-row-hover);
+}
+
+.relationshipBranch {
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
+.relationshipNodeContent {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.relationshipName {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.relationshipTarget {
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.relationshipImplemented,
+.relationshipNotImplemented {
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.relationshipImplemented {
+    color: #166534;
+    background: rgba(34, 197, 94, 0.12);
+}
+
+.relationshipNotImplemented {
+    color: var(--text-muted);
+    background: var(--bg-page);
+}
+
+.relationshipDetails {
+    padding: 16px;
+}
+
+.relationshipDetailList {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+}
+
+.relationshipDetailList div {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 8px;
+}
+
+.relationshipDetailList dt {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.relationshipDetailList dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+}
+
+.relationshipActions,
+.relationshipFooter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.relationshipActions {
+    margin-top: 18px;
+}
+
+.relationshipFooter {
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.secondaryButton {
+    height: 32px;
+    padding: 0 12px;
+    color: var(--text-body);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.secondaryButton:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+@media (max-width: 850px) {
+    .relationshipExplorerBody {
+        grid-template-columns: 1fr;
+    }
+
+    .relationshipTree {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+    }
+}
+
 .sectionTitle {
     font-size: 12px;
     font-weight: 700;

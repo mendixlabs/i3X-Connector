@@ -7,6 +7,7 @@ import { getObjectsUrl, unwrapI3xResult } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
 import { GroupSection, type RefResolver, type ComponentTypeResolver } from './SchemaTree';
 import ObjectsTable from './ObjectsTable';
+import RelationshipsExplorer from './RelationshipsExplorer';
 
 interface Props {
     context: ComponentContext;
@@ -45,7 +46,7 @@ async function runArtifactAction(
 
 const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectTypes, onClose, onNavigateToType }) => {
     const studioPro = getStudioProApi(context);
-    const [activeTab, setActiveTab] = useState<'attributes' | 'objects'>('attributes');
+    const [activeTab, setActiveTab] = useState<'attributes' | 'objects' | 'relationships'>('attributes');
     const [isLoadingObjects, setIsLoadingObjects] = useState(true);
     const [isCreatingQuery, setIsCreatingQuery] = useState(false);
     const [isCreatingHistory, setIsCreatingHistory] = useState(false);
@@ -379,10 +380,27 @@ const DetailPanel: React.FC<Props> = ({ context, connection, item, allObjectType
                 >
                     Objects
                 </button>
+                <button
+                    className={`${styles.detailTabButton} ${activeTab === 'relationships' ? styles.detailTabButtonActive : ''}`}
+                    onClick={() => setActiveTab('relationships')}
+                >
+                    Relationships
+                </button>
             </div>
 
             {/* Properties or retrieved objects */}
-            {activeTab === 'objects' ? (
+            {activeTab === 'relationships' ? (
+                <div className={styles.detailSection}>
+                    <RelationshipsExplorer
+                        context={context}
+                        connection={connection}
+                        item={item}
+                        sourceElementId={selectedObjectSample?.elementId ?? null}
+                        allObjectTypes={allObjectTypes}
+                        onNavigateToType={onNavigateToType}
+                    />
+                </div>
+            ) : activeTab === 'objects' ? (
                 <div className={styles.detailSection}>
                     <ObjectsTable
                         isLoadingObjects={isLoadingObjects}

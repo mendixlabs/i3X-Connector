@@ -1,4 +1,4 @@
-import type { DomainModels, Mappings, Microflows } from '@mendix/extensions-api';
+import type { DataTypes, DomainModels, Mappings, Microflows } from '@mendix/extensions-api';
 import {
     IMPLEMENTATION_MODULE,
     DECIMAL_WRITE_MARKER,
@@ -64,9 +64,12 @@ interface ValueQueryArtifactsResult extends DomainModelResult {
 // ── Layout constants ──────────────────────────────────────────────────────────
 const ATTR_ROW_H  = 20;   // px per attribute row
 const ENTITY_HDR_H = 30;  // px for entity header
-const H_GAP        = 80;  // horizontal gap between base and group column
-const V_GAP        = 40;  // vertical gap between group entities
+const H_GAP        = 140; // horizontal gap between entity columns
+const V_GAP        = 80;  // vertical gap between entities
 const BASE_WIDTH   = 200; // base entity column width
+const ENTITY_VISUAL_WIDTH = 100; // Studio Pro entity box width used by relative connector points
+const CONNECTION_EDGE = 100; // Association connection points use a 0-100 relative scale
+const RELATIONSHIP_STAGGER_X = 24;
 function entityHeight(attrCount: number): number {
     return ENTITY_HDR_H + Math.max(1, attrCount) * ATTR_ROW_H;
 }
@@ -142,6 +145,21 @@ async function ensureAssociation(
             multiplicity: isArrayAssociation ? 'many_to_many' : 'one_to_many',
         }
     );
+    const parentEntity = domainModel.entities.find(entity => entity.$ID === parentEntityId);
+    const childEntity = domainModel.entities.find(entity => entity.$ID === childEntityId);
+    if (parentEntity && childEntity) {
+        const deltaX = childEntity.location.x - parentEntity.location.x;
+        const deltaY = childEntity.location.y - parentEntity.location.y;
+        if (Math.abs(deltaY) >= Math.abs(deltaX)) {
+            const childIsBelow = deltaY >= 0;
+            association.parentConnection = { x: ENTITY_VISUAL_WIDTH / 2, y: childIsBelow ? CONNECTION_EDGE : 0 };
+            association.childConnection = { x: ENTITY_VISUAL_WIDTH / 2, y: childIsBelow ? 0 : CONNECTION_EDGE };
+        } else {
+            const childIsRight = deltaX >= 0;
+            association.parentConnection = { x: childIsRight ? CONNECTION_EDGE : 0, y: CONNECTION_EDGE / 2 };
+            association.childConnection = { x: childIsRight ? 0 : CONNECTION_EDGE, y: CONNECTION_EDGE / 2 };
+        }
+    }
     domainModel.associations.push(association);
     return true;
 }
@@ -453,13 +471,21 @@ async function createValueQueryArtifacts(
     endpointFolderId: string
 ): Promise<ValueQueryArtifactsResult & { syntheticData: boolean }> {
     const baseEntityName = toModelName(objectType.displayName);
-    const sampleResponse = selectedObject !== null
+    const liveSampleResponse = selectedObject !== null
         ? await fetchJsonSampleResponse(objectsValueUrl, connection, {
               method: 'POST',
               headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
               body: buildValueQueryHttpRequestBody(selectedObject.elementId.trim()),
           })
         : buildSyntheticValueResponse(objectType);
+
+    // ObjectTypes used as containers can return value: null with GoodNoData. Mendix
+    // cannot create an object mapping at the surrounding polymorphic result node.
+    // Use the declared object shape for the JSON Structure so the regular value path
+    // remains mappable; a runtime null then naturally produces no mapped object.
+    const sampleResponse = selectedObject !== null
+        ? replaceNullObjectValueWithDeclaredShape(liveSampleResponse, objectType)
+        : liveSampleResponse;
 
     // Value-query entities come from the unwrapped latest-value payload, while
     // the JSON Structure is intentionally created from the raw response body.
@@ -820,6 +846,31 @@ function tagResponseValueFromSchema(
             return [key, childValue];
         })
     );
+}
+
+function replaceNullObjectValueWithDeclaredShape(
+    sample: JsonSampleResponse,
+    objectType: ObjectType
+): JsonSampleResponse {
+    if (objectType.schema.type !== 'object' || sample.parsed === null || typeof sample.parsed !== 'object') {
+        return sample;
+    }
+    const results = (sample.parsed as { results?: unknown }).results;
+    if (!Array.isArray(results)) return sample;
+
+    let replaced = false;
+    const normalizedResults = results.map(item => {
+        if (item === null || typeof item !== 'object' || Array.isArray(item)) return item;
+        const result = (item as { result?: unknown }).result;
+        if (result === null || typeof result !== 'object' || Array.isArray(result)) return item;
+        if ((result as { value?: unknown }).value !== null) return item;
+        replaced = true;
+        return { ...item, result: { ...result, value: {} } };
+    });
+    if (!replaced) return sample;
+
+    const parsed = { ...(sample.parsed as Record<string, unknown>), results: normalizedResults };
+    return { parsed, rawText: JSON.stringify(parsed) };
 }
 
 function stringifySchemaAwareResponse(value: unknown): string {
@@ -1225,6 +1276,200 @@ export async function checkValueQueryEntitiesExist(
     return domainModel.entities.find(e => e.name === entityName) !== undefined;
 }
 
+async function configureImportMappingParameter(
+    mappingId: string,
+    parameterEntityQualifiedName: string,
+    associationQualifiedName: string
+): Promise<void> {
+    const sp = getStudioPro();
+    const mapping = (await sp.app.model.importMappings.loadAll(unit => unit.$ID === mappingId))[0];
+    if (!mapping) throw new Error(`Import mapping '${mappingId}' could not be loaded.`);
+
+    const parameterType = await sp.app.model.importMappings.createElement<DataTypes.ObjectType>(
+        'DataTypes$ObjectType',
+        { entity: parameterEntityQualifiedName }
+    );
+    mapping.parameterType = parameterType;
+    for (const rootElement of mapping.rootMappingElements) {
+        rootElement.association = associationQualifiedName;
+        rootElement.objectHandling = 'Create';
+    }
+    await sp.app.model.importMappings.save(mapping);
+}
+
+export interface RelationshipArtifactsResult {
+    microflowName: string;
+    microflowCreated: boolean;
+    jsonStructureName: string;
+    jsonStructureCreated: boolean;
+    importMappingName: string;
+    importMappingCreated: boolean;
+    associationName: string;
+    associationCreated: boolean;
+}
+
+export interface RelatedObjectSample {
+    elementId: string;
+    displayName: string;
+    typeElementId: string;
+}
+
+function getRelationshipArtifactNames(sourceType: ObjectType, targetType: ObjectType, relationship: string) {
+    const sourceName = toModelName(sourceType.displayName);
+    const targetName = toModelName(targetType.displayName);
+    const relationshipName = toModelName(relationship);
+    const artifactStem = `${sourceName}_Related_${relationshipName}_${targetName}`;
+    return {
+        sourceName,
+        targetName,
+        microflowName: `MF_${artifactStem}`,
+        jsonStructureName: `JSON_${artifactStem}`,
+        importMappingName: `IM_${artifactStem}`,
+        associationName: toModelName(`${sourceName}_${relationshipName}_${targetName}`),
+    };
+}
+
+export async function checkRelationshipArtifactsExist(
+    sourceType: ObjectType,
+    targetType: ObjectType,
+    relationship: string
+): Promise<boolean> {
+    const { microflowName } = getRelationshipArtifactNames(sourceType, targetType, relationship);
+    return Boolean(await findMicroflow(microflowName));
+}
+
+export async function createRelationshipArtifacts(
+    sourceType: ObjectType,
+    targetType: ObjectType,
+    relationship: string,
+    sourceElementId: string,
+    targetSample: RelatedObjectSample,
+    connection: ConnectionConfig
+): Promise<RelationshipArtifactsResult> {
+    const sp = getStudioPro();
+    const names = getRelationshipArtifactNames(sourceType, targetType, relationship);
+
+    if (!(await checkValueQueryEntitiesExist(sourceType))) {
+        await createQueryValuesMicroflow(sourceType, { elementId: sourceElementId }, connection);
+    }
+    const targetEntityAlreadyExisted = await checkValueQueryEntitiesExist(targetType);
+    if (!targetEntityAlreadyExisted) {
+        await createQueryValuesMicroflow(targetType, { elementId: targetSample.elementId }, connection);
+    }
+
+    const { baseUrlConstantRef, authRefs, objectTypeFolderId, mappingsFolderId } =
+        await ensureObjectTypeArtifactContext(connection, names.sourceName);
+    const domainModel = await sp.app.model.domainModels.getDomainModel(IMPLEMENTATION_MODULE);
+    if (!domainModel) throw new Error(`Module '${IMPLEMENTATION_MODULE}' has no domain model.`);
+
+    const sourceEntity = domainModel.entities.find(entity => entity.name === names.sourceName);
+    const targetEntity = domainModel.entities.find(entity => entity.name === names.targetName);
+    if (!sourceEntity || !targetEntity) {
+        throw new Error(`Could not prepare '${names.sourceName}' and '${names.targetName}' entities.`);
+    }
+
+    if (!targetEntityAlreadyExisted && sourceEntity.$ID !== targetEntity.$ID) {
+        const relationshipIndex = domainModel.associations.filter(
+            association => association.parent === sourceEntity.$ID
+        ).length + 1;
+        targetEntity.location = {
+            x: sourceEntity.location.x + relationshipIndex * RELATIONSHIP_STAGGER_X,
+            y: targetEntity.location.y,
+        };
+    }
+
+    await ensureAttribute(sourceEntity, 'elementId', 'String');
+    await ensureAttribute(targetEntity, 'elementId', 'String');
+    await ensureAttribute(targetEntity, 'displayName', 'String');
+    await ensureAttribute(targetEntity, 'typeElementId', 'String');
+    const associationCreated = await ensureAssociation(
+        domainModel,
+        names.associationName,
+        sourceEntity.$ID,
+        targetEntity.$ID,
+        true
+    );
+    await sp.app.model.domainModels.save(domainModel);
+
+    const objectPath = `${OBJECT_PATH}|results|${OBJECT_PATH}|result|${OBJECT_PATH}|object`;
+    const responseSample = {
+        success: true,
+        results: [{
+            success: true,
+            elementId: sourceElementId,
+            result: [{ sourceRelationship: relationship, object: targetSample }],
+        }],
+    };
+    const jsonStructureResult = await createOrUpdateJsonStructure(
+        names.jsonStructureName,
+        JSON.stringify(responseSample, null, 2),
+        mappingsFolderId
+    );
+    const importMappingResult = await createOrUpdateImportMapping(
+        names.importMappingName,
+        `${IMPLEMENTATION_MODULE}.${names.jsonStructureName}`,
+        [
+            objectPath,
+            `${objectPath}|elementId`,
+            `${objectPath}|displayName`,
+            `${objectPath}|typeElementId`,
+        ],
+        [{
+            path: objectPath,
+            entityQualifiedName: `${IMPLEMENTATION_MODULE}.${names.targetName}`,
+            valueMappings: { elementId: 'elementId', displayName: 'displayName', typeElementId: 'typeElementId' },
+        }],
+        mappingsFolderId
+    );
+    await configureImportMappingParameter(
+        importMappingResult.mappingId,
+        `${IMPLEMENTATION_MODULE}.${names.sourceName}`,
+        `${IMPLEMENTATION_MODULE}.${names.associationName}`
+    );
+
+    const existingMicroflow = await findMicroflow(names.microflowName);
+    if (existingMicroflow) await sp.app.model.microflows.deleteUnit(existingMicroflow.$ID);
+    const microflow = await sp.app.model.microflows.addMicroflow(
+        objectTypeFolderId,
+        { name: names.microflowName },
+        false
+    );
+    await addMicroflowParameters(microflow, [{
+        name: names.sourceName,
+        entityQualifiedName: `${IMPLEMENTATION_MODULE}.${names.sourceName}`,
+    }]);
+    const escapedRelationship = relationship.replace(/'/g, "''");
+    await populateMicroflowWithRestCall(sp, microflow, {
+            url: buildRestLocationTemplate('/objects/related', baseUrlConstantRef).text,
+            urlArgs: [baseUrlConstantRef],
+            requestBody: '{{"elementIds":["{1}"],"relationshipType":"{2}","includeMetadata":false}',
+            requestBodyArgs: [`$${names.sourceName}/elementId`, `'${escapedRelationship}'`],
+            extraHeaders: JSON_EXTRA_HEADERS,
+            authRefs,
+            importMappingQualifiedName: `${IMPLEMENTATION_MODULE}.${names.importMappingName}`,
+            importMappingOutput: {
+                outputVariableName: 'RelatedObjects',
+                entityQualifiedName: `${IMPLEMENTATION_MODULE}.${names.targetName}`,
+                isList: true,
+                mappingArgumentVariableName: names.sourceName,
+            },
+            returnMappedResult: true,
+            annotationText: `The ${names.sourceName}/elementId must contain the i3X element ID. Imported ${names.targetName} objects are associated through ${names.associationName}.`,
+    });
+    await sp.app.model.microflows.save(microflow);
+
+    return {
+        microflowName: names.microflowName,
+        microflowCreated: !existingMicroflow,
+        jsonStructureName: names.jsonStructureName,
+        jsonStructureCreated: jsonStructureResult.created,
+        importMappingName: names.importMappingName,
+        importMappingCreated: importMappingResult.created,
+        associationName: names.associationName,
+        associationCreated,
+    };
+}
+
 export interface WriteMicroflowResult {
     microflowName: string;
     microflowId: string;
@@ -1258,8 +1503,9 @@ async function ensureSubscriptionEntities(baseEntityName: string): Promise<Subsc
         { x: 0, y: startY },
         true
     );
-    const batch = await ensureEntity(domainModel, `${baseEntityName}_SubscriptionBatch`, { x: 280, y: startY });
-    const update = await ensureEntity(domainModel, `${baseEntityName}_SubscriptionUpdate`, { x: 560, y: startY });
+    const columnWidth = BASE_WIDTH + H_GAP;
+    const batch = await ensureEntity(domainModel, `${baseEntityName}_SubscriptionBatch`, { x: columnWidth, y: startY });
+    const update = await ensureEntity(domainModel, `${baseEntityName}_SubscriptionUpdate`, { x: columnWidth * 2, y: startY });
 
     for (const name of ['clientId', 'subscriptionId', 'displayName', 'elementId', 'lastSequenceNumber']) {
         await ensureAttribute(subscription.entity, name, 'String');

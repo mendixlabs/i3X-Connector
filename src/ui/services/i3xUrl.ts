@@ -52,3 +52,7 @@ export function getObjectsUrl(apiBaseUrl: string, typeId: string): string | null
 export function getObjectsValueUrl(apiBaseUrl: string): string | null {
     return buildFromBase(apiBaseUrl, '/objects/value')?.toString() ?? null;
 }
+
+export function getRelatedObjectsUrl(apiBaseUrl: string): string | null {
+    return buildFromBase(apiBaseUrl, '/objects/related')?.toString() ?? null;
+}

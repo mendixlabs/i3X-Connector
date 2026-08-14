@@ -158,11 +158,9 @@ function normalizeValueQueryResultPayload(item: unknown): Record<string, unknown
         return normalizeSampleForMapping(value);
     }
 
-    return normalizeSampleForMapping({
-        value,
-        quality: resultObject.quality ?? null,
-        timestamp: resultObject.timestamp ?? null,
-    });
+    // quality, timestamp, and isComposition describe the response, not the
+    // ObjectType value. Keep generated entities limited to the value payload.
+    return normalizeSampleForMapping(value !== null ? { value } : {});
 }
 
 
