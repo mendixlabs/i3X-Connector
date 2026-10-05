@@ -9,7 +9,7 @@
     "build:dev": "tsc --noEmit && node build-extension.mjs --watch"
   },
   "dependencies": {
-    "@mendix/extensions-api": "0.13.0-mendix.11.14.0",
+    "@mendix/extensions-api": "0.14.0-mendix.11.15.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
