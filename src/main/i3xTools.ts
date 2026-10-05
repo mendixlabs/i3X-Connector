@@ -16,7 +16,8 @@ import type { ExternalAIToolDefinition } from "./aiTools";
 
 const NOT_CONNECTED =
     "Not connected to an i3X server. Ask the user to open Extensions > i3X Connector, " +
-    "enter the server URL and credentials, and press Load. Then try again.";
+    "enter the server URL and credentials, and press Load. Then try again. " +
+    "Never ask the user for the URL or credentials in the chat.";
 
 const MAX_LISTED_OBJECTS = 50;
 
@@ -29,7 +30,8 @@ const OBJECT_TYPE_INPUT_DESCRIPTION =
 const SCOPE_NOTE =
     "This tool does not read or search the Mendix modules, entities or microflows already in the app " +
     "(such as i3x_connector or i3x_implementation); it only talks to the i3X server the user connected " +
-    "to in the i3X Connector tab.";
+    "to in the i3X Connector tab. Never invent object type names, object names or elementIds; " +
+    "only use values a tool returned. If the user declines the confirmation, do not call the tool again.";
 
 // Order matters: write and subscription need the entities that the value query creates.
 const ARTIFACT_KINDS = ["valueQuery", "history", "write", "subscription"] as const;
@@ -178,7 +180,7 @@ async function generateArtifacts(sp: StudioProApi, input: Record<string, unknown
         lines.push(`- Subscription: ${result.microflowsCreated} of ${result.microflowNames.length} microflows created (${result.microflowNames.join(", ")}); state entity '${result.subscriptionEntityName}'.`);
     }
 
-    lines.push("Next: tell the user which artifacts were created. To generate more kinds for this type, call i3x_generate_artifacts again.");
+    lines.push("Next: tell the user which artifacts were created, including any Note or Action needed lines above. To generate more kinds for this type, call i3x_generate_artifacts again.");
     return lines.join("\n");
 }
 
@@ -187,6 +189,8 @@ export function buildI3xTools(sp: StudioProApi): ExternalAIToolDefinition[] {
         {
             name: "i3x_list_object_types",
             description:
+                "Use when the user asks which object types, equipment types, asset types or data models an i3X " +
+                "server has, for example 'what equipment is on the i3X server?'. " +
                 "Calls the remote CESMII i3X server over HTTP and lists its object types (equipment and data " +
                 "models, for example a motor drive or a pump). Returns each type's elementId, display name and " +
                 "top-level properties. The server's types can change, so call this tool every time the user asks " +
@@ -210,6 +214,8 @@ export function buildI3xTools(sp: StudioProApi): ExternalAIToolDefinition[] {
         {
             name: "i3x_list_objects",
             description:
+                "Use when the user asks which objects, assets or machines of a type exist on the i3X server, " +
+                "for example 'which pumps are there?'. " +
                 "Calls the remote CESMII i3X server over HTTP and lists the object instances of one object type, " +
                 "for example the individual pumps of type Pump. Returns each object's elementId and display name, " +
                 `at most ${MAX_LISTED_OBJECTS}. Objects change on the server, so call this tool every time the user ` +
@@ -243,12 +249,17 @@ export function buildI3xTools(sp: StudioProApi): ExternalAIToolDefinition[] {
         {
             name: "i3x_generate_artifacts",
             description:
+                "Use when the user wants Mendix entities, mappings or microflows that read current or historical " +
+                "values from, write values to, or subscribe to an i3X object type, for example 'build me a microflow " +
+                "that reads the pump values'. " +
                 "Reads one object type from the remote CESMII i3X server and generates new Mendix artifacts for it " +
                 "in the i3X_Implementation module: entities, JSON structures, " +
                 "import/export mappings and microflows that call the i3X server. Artifact kinds: " +
                 "'valueQuery' (read current values), 'history' (read historical values), " +
                 "'write' (write values back; needs valueQuery), 'subscription' (subscribe to changes; needs valueQuery). " +
-                "Existing artifacts are reused, not duplicated. " + SCOPE_NOTE,
+                "When the user asks for 'write' or 'subscription', also include 'valueQuery' in the same call; it is " +
+                "reused if it already exists. Existing artifacts are reused, not duplicated, so calling again is safe. " +
+                "After the call, pass every 'Note' and 'Action needed' line of the result on to the user. " + SCOPE_NOTE,
             inputSchema: {
                 type: "object",
                 properties: {

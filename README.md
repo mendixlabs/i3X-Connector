@@ -28,9 +28,9 @@ To set it up:
 
 1. Open **View > Extensions** and grant the **Register AI Tools** permission to the i3X Connector.
 2. Open **Extensions > i3X Connector**, enter the server URL and credentials, and press **Load**. The tools use this connection. It stays in memory for the current Studio Pro session, so credentials never pass through the Maia chat.
-3. Ask Maia in plain words. For example: "Which pumps are on the i3X server?" or "Build me a microflow that reads the current pump values".
+3. Ask Maia. For example: "Which pumps are on the i3X server?" or "Build me a microflow that reads the current pump values from the i3X server".
 
-The module ships a Maia skill, `i3x-connector-tools` (source in `skills/`), that tells Maia when to use the tools and how to chain them. Without the skill, Maia tends to search the app's `i3x_*` modules instead; naming the tool in the prompt then helps. Maia asks for confirmation before every tool call.
+Mention the i3X server in your question. The app also contains modules with i3x in their names, and Maia may search those instead. If it does, name the tool, for example "Call `i3x_list_objects` for Pump". Maia asks for confirmation before every tool call.
 
 ## What it does
 
@@ -102,8 +102,6 @@ src/
   ui/services/:            auth, URL normalization, Studio Pro code generation
   ui/types/:               shared TypeScript types
   manifest.json:           extension manifest
-skills/
-  i3x-connector-tools/:    Maia skill; the build copies it to the app's skillssource/_modules/i3x_connector/
 ```
 
 ## Auth support
