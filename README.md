@@ -14,6 +14,24 @@ Alternatively, you can install the prebuilt module package directly from [Packag
 
 Once the extension is installed, open it from the Studio Pro top menu: **Extensions → i3X Connector**. This opens the connector panel where you configure the connection and generate artifacts.
 
+## Using with Maia
+
+From Studio Pro 11.15, the extension also registers tools that Maia can call. You can then ask Maia to browse the i3X server and generate artifacts without clicking through the panel.
+
+| Tool | What it does |
+|---|---|
+| `i3x_list_object_types` | Lists the object types on the connected i3X server |
+| `i3x_list_objects` | Lists the objects of one type |
+| `i3x_generate_artifacts` | Generates value query, history, write or subscription artifacts for one type in `i3X_Implementation` |
+
+To set it up:
+
+1. Open **View > Extensions** and grant the **Register AI Tools** permission to the i3X Connector.
+2. Open **Extensions > i3X Connector**, enter the server URL and credentials, and press **Load**. The tools use this connection. It stays in memory for the current Studio Pro session, so credentials never pass through the Maia chat.
+3. Ask Maia, naming the tool. For example: "Call `i3x_list_objects` for the Pump object type" or "Call `i3x_generate_artifacts` for Pump with artifacts valueQuery and history".
+
+Maia asks for confirmation before every tool call. The app also contains modules with i3x in their names, so naming the tool keeps Maia from searching the app model instead.
+
 ## What it does
 
 1. You enter your i3X API base URL and auth credentials in the extension panel.
@@ -29,7 +47,7 @@ Once the extension is installed, open it from the Studio Pro top menu: **Extensi
 
 ## Requirements
 
-- Mendix Studio Pro 11.10 or later
+- Mendix Studio Pro 11.15 or later (built against `@mendix/extensions-api` 0.14.0)
 - An i3X API endpoint (self-hosted or CESMII-hosted) with valid credentials
 
 ## Installation
@@ -74,12 +92,16 @@ The build runs TypeScript type-checking first, then bundles via esbuild into `di
 
 ```
 src/
-  main/index.ts       — registers the menu item in Studio Pro (main process)
-  ui/index.tsx        — React app entry point (UI process)
-  ui/components/      — Loader, List, DetailPanel
-  ui/services/        — auth, URL normalization, Studio Pro code generation
-  ui/types/           — shared TypeScript types
-  manifest.json       — extension manifest
+  main/index.ts:           registers the menu item and the Maia tools (main process)
+  main/i3xTools.ts:        Maia tool definitions (list object types, list objects, generate artifacts)
+  main/aiTools.ts:         Maia tool registration, gated on the register-ai-tools permission
+  main/connectionStore.ts: holds the connection the UI tab shares with the Maia tools
+  shared/messages.ts:      message types passed between the UI tab and main
+  ui/index.tsx:            React app entry point (UI process)
+  ui/components/:          Loader, List, DetailPanel
+  ui/services/:            auth, URL normalization, Studio Pro code generation
+  ui/types/:               shared TypeScript types
+  manifest.json:           extension manifest
 ```
 
 ## Auth support

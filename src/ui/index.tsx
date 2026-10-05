@@ -5,6 +5,7 @@ import { Loader, List, DetailPanel } from "./components/_components";
 import { createObjectsListMicroflow, initStudioPro, summarizeArtifactResult } from "./services/studioProService";
 import { ConnectionConfig, ObjectType, isObjectTypeArray } from "./types";
 import { IMPLEMENTATION_MODULE } from "./constants";
+import type { ConnectionMessage } from "../shared/messages";
 import styles from "./index.module.css";
 
 export const component: IComponent = {
@@ -36,6 +37,14 @@ export const component: IComponent = {
             const handleDataLoaded = (data: unknown) => {
                 setSelectedItem(null);
                 setApiData(data);
+            };
+
+            const handleConnected = (config: ConnectionConfig) => {
+                setConnection(config);
+                const message: ConnectionMessage = { type: "i3x.connection", config };
+                studioPro.ui.messagePassing.sendMessage(message).catch((error: unknown) => {
+                    console.error("Could not share the connection with the Maia tools:", error);
+                });
             };
 
             const handleCreateObjectsList = async () => {
@@ -114,7 +123,7 @@ export const component: IComponent = {
                         Enter an i3X API endpoint URL below and press <kbd className={styles.kbd}>Enter</kbd> or click <strong>Load</strong> to retrieve object types. Click any row to inspect its schema.
                     </p>
 
-                    <Loader context={componentContext} setApiData={handleDataLoaded} setConnection={setConnection} />
+                    <Loader context={componentContext} setApiData={handleDataLoaded} setConnection={handleConnected} />
                     <List
                         apiData={apiData}
                         selectedId={selectedItem?.elementId ?? null}
