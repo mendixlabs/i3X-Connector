@@ -1,4 +1,5 @@
 import { IComponent, getStudioProApi } from "@mendix/extensions-api";
+import { registerAiTools, showAiToolStatus } from "./aiTools";
 
 export const component: IComponent = {
     async loaded(componentContext) {
@@ -19,5 +20,14 @@ export const component: IComponent = {
                 );
             }
         });
+
+        // Spike diagnostics; remove once the Maia tools are confirmed working.
+        await studioPro.ui.extensionsMenu.add({
+            menuId: "i3X-Connector.AiToolStatus",
+            caption: "i3X Connector: AI tool status",
+            action: async () => { await showAiToolStatus(studioPro); }
+        });
+
+        await registerAiTools(studioPro);
     }
 }

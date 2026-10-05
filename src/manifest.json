@@ -5,6 +5,9 @@
       "ui": {
         "list": "list.js"
       }
+    },
+    "permissions": {
+      "register-ai-tools": true
     }
   }
 }
