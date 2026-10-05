@@ -43,6 +43,27 @@ export const copyToAppPlugin = (appDir, outDir, extensionDirectoryName) => ({
     }
 });
 
+// Maia skills ship with the module they sit under, so they reach Marketplace users through the
+// exported module package. Each skill folder in skillsDir replaces its copy in the app.
+export const copySkillsToAppPlugin = (appDir, skillsDir, moduleSkillsDirName) => ({
+    name: "copy-skills-to-app",
+    setup(build) {
+        build.onEnd(async result => {
+            if (result.errors.length || !pathExists(appDir) || !pathExists(skillsDir)) return;
+
+            const targetDir = `${appDir}/skillssource/_modules/${moduleSkillsDirName}`;
+            await fs.mkdir(targetDir, { recursive: true });
+
+            for (const entry of await fs.readdir(skillsDir, { withFileTypes: true })) {
+                if (!entry.isDirectory()) continue;
+                const deployedSkillPath = `${targetDir}/${entry.name}`;
+                await fs.rm(deployedSkillPath, { recursive: true, force: true });
+                await fs.cp(`${skillsDir}/${entry.name}`, deployedSkillPath, { recursive: true });
+            }
+        });
+    }
+});
+
 export const copyManifestPlugin = outDir => ({
     name: "copy-manifest",
     setup(build) {
