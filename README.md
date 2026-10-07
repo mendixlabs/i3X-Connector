@@ -6,7 +6,9 @@ A Mendix Studio Pro extension that connects your Mendix app to the [CESMII i3X S
 
 ## Quick install
 
-The extension is available on the [Mendix Marketplace](https://marketplace.mendix.com/link/component/201816). For Mendix Studio Pro 11.10+, download it from the Marketplace and follow the in-product import flow.
+The extension is available on the [Mendix Marketplace](https://marketplace.mendix.com/link/component/201816). Download it from the Marketplace and follow the in-product import flow.
+
+Version 2.2.0 and later need Mendix Studio Pro 11.15 or later. On Studio Pro 11.10 to 11.14, use version 2.0.0.
 
 Alternatively, you can install the prebuilt module package directly from [Packages/i3X_Connector.mxmodule](Packages/i3X_Connector.mxmodule): in App Explorer, right-click the **App** node, choose **Import Module Package**, then select the file.
 
@@ -16,10 +18,11 @@ Once the extension is installed, open it from the Studio Pro top menu: **Extensi
 
 ## Using with Maia
 
-From Studio Pro 11.15, the extension also registers tools that Maia can call. You can then ask Maia to browse the i3X server and generate artifacts without clicking through the panel.
+From version 2.2.0 (Studio Pro 11.15 and later), the extension also registers tools that Maia can call. You can then ask Maia to browse the i3X server and generate artifacts without clicking through the panel.
 
 | Tool | What it does |
 |---|---|
+| `i3x_connect` | Connects the other tools to the i3X server set in the app's constants |
 | `i3x_list_object_types` | Lists the object types on the connected i3X server |
 | `i3x_list_objects` | Lists the objects of one type |
 | `i3x_generate_artifacts` | Generates value query, history, write or subscription artifacts for one type in `i3X_Implementation` |
@@ -27,7 +30,11 @@ From Studio Pro 11.15, the extension also registers tools that Maia can call. Yo
 To set it up:
 
 1. Open **View > Extensions** and grant the **Register AI Tools** permission to the i3X Connector.
-2. Open **Extensions > i3X Connector**, enter the server URL and credentials, and press **Load**. The tools use this connection. It stays in memory for the current Studio Pro session, so credentials never pass through the Maia chat.
+2. Connect to a server in one of two ways:
+   - **Through Maia:** `i3x_connect` reads the server URL and credentials from the String constants in `i3X_Implementation`: `API_BaseUrl`, plus `API_Token` or `API_Username` and `API_Password`. The connector creates these constants the first time it generates artifacts. If they don't exist yet, Maia can create them for you. Any URL or credential you type in the chat stays in the chat history.
+   - **In the tab:** open **Extensions > i3X Connector**, enter the server URL and credentials, and press **Load**.
+
+   Both ways share one connection. A connection made through Maia also shows up in the tab. It lasts for the current Studio Pro session.
 3. Ask Maia. For example: "Which pumps are on the i3X server?" or "Build me a microflow that reads the current pump values from the i3X server".
 
 Mention the i3X server in your question. The app also contains modules with i3x in their names, and Maia may search those instead. If it does, name the tool, for example "Call `i3x_list_objects` for Pump". Maia asks for confirmation before every tool call.
@@ -93,8 +100,9 @@ The build runs TypeScript type-checking first, then bundles via esbuild into `di
 ```
 src/
   main/index.ts:           registers the menu item and the Maia tools (main process)
-  main/i3xTools.ts:        Maia tool definitions (list object types, list objects, generate artifacts)
+  main/i3xTools.ts:        Maia tool definitions (connect, list object types, list objects, generate artifacts)
   main/aiTools.ts:         Maia tool registration, gated on the register-ai-tools permission
+  main/i3xConnect.ts:      reads the i3x_connect tool's connection from the app's constants
   main/connectionStore.ts: holds the connection the UI tab shares with the Maia tools
   shared/messages.ts:      message types passed between the UI tab and main
   ui/index.tsx:            React app entry point (UI process)

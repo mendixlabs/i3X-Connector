@@ -32,7 +32,9 @@ function sanitizeFolderName(raw: string): string {
     return raw.trim().replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'Endpoint';
 }
 
-function deriveEndpointFolderName(normalizedBaseUrl: string): string {
+// Multi-server mode names the endpoint folder and its constants after this, for example
+// API_BaseUrl_<name>. The Maia connect tool uses it to check hand-made constant names.
+export function deriveEndpointFolderName(normalizedBaseUrl: string): string {
     try {
         const url = new URL(normalizedBaseUrl);
         const host = url.hostname;

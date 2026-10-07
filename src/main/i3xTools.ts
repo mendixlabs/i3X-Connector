@@ -11,13 +11,13 @@ import {
     createWriteMicroflow,
     summarizeArtifactResult,
 } from "../ui/services/studioProService";
-import { getLastConnection } from "./connectionStore";
+import { getLastConnection, setLastConnection, shareConnectionWithTab } from "./connectionStore";
+import { AUTH_MODES, CONSTANT_NAMING_HELP, parseConnectInput, readConnectionFromConstants } from "./i3xConnect";
 import type { ExternalAIToolDefinition } from "./aiTools";
 
 const NOT_CONNECTED =
-    "Not connected to an i3X server. Ask the user to open Extensions > i3X Connector, " +
-    "enter the server URL and credentials, and press Load. Then try again. " +
-    "Never ask the user for the URL or credentials in the chat.";
+    "Not connected to an i3X server. Call i3x_connect first, then try again. " +
+    "The user can also connect in Extensions > i3X Connector by entering the server URL and credentials and pressing Load.";
 
 const MAX_LISTED_OBJECTS = 50;
 
@@ -29,8 +29,8 @@ const OBJECT_TYPE_INPUT_DESCRIPTION =
 // these tools. Every description spells out that the tools talk to the remote server.
 const SCOPE_NOTE =
     "This tool does not read or search the Mendix modules, entities or microflows already in the app " +
-    "(such as i3x_connector or i3x_implementation); it only talks to the i3X server the user connected " +
-    "to in the i3X Connector tab. Never invent object type names, object names or elementIds; " +
+    "(such as i3x_connector or i3x_implementation); it only talks to the i3X server connected " +
+    "with i3x_connect or the i3X Connector tab. Never invent object type names, object names or elementIds; " +
     "only use values a tool returned. If the user declines the confirmation, do not call the tool again.";
 
 // Order matters: write and subscription need the entities that the value query creates.
@@ -184,8 +184,64 @@ async function generateArtifacts(sp: StudioProApi, input: Record<string, unknown
     return lines.join("\n");
 }
 
+async function connect(sp: StudioProApi, input: Record<string, unknown>): Promise<string> {
+    const connection = await readConnectionFromConstants(sp, parseConnectInput(input));
+    // Check the connection before storing it, so a wrong URL or token fails here
+    // instead of in the next tool call.
+    const types = await fetchObjectTypes(sp, connection);
+    setLastConnection(connection);
+    await shareConnectionWithTab(sp, connection).catch((error: unknown) => {
+        console.error("Could not share the connection with the i3X Connector tab:", error);
+    });
+    const auth = connection.auth.mode === "token"
+        ? `token in header '${connection.auth.headerName}'${connection.auth.prefix ? ` with prefix '${connection.auth.prefix}'` : ""}`
+        : connection.auth.mode;
+    return [
+        `Connected to ${connection.apiBaseUrl} (auth: ${auth}${connection.multiServerMode ? ", multi-server constants" : ""}). The server has ${types.length} object types.`,
+        "The connection lasts for this Studio Pro session.",
+        "Next: call i3x_list_object_types, i3x_list_objects or i3x_generate_artifacts. Do not repeat credential values in the chat.",
+    ].join("\n");
+}
+
 export function buildI3xTools(sp: StudioProApi): ExternalAIToolDefinition[] {
     return [
+        {
+            name: "i3x_connect",
+            description:
+                "Use when another i3x_ tool says it is not connected, or when the user asks to connect to an i3X " +
+                "server. Reads the i3X server URL and credentials from String constants in the app's " +
+                "i3X_Implementation module, checks them against the server, and connects the other i3x_ tools to it. " +
+                "If the constants already exist, call this tool directly. If they do not exist yet, ask the user for " +
+                "the server URL and auth settings, create the constants with the names below and fill in their " +
+                "default values, then call this tool. " + CONSTANT_NAMING_HELP + " " +
+                "For token auth the token goes in the Authorization header with prefix 'Bearer', unless the user " +
+                "says otherwise; then pass tokenHeaderName and tokenPrefix.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    server: {
+                        type: "string",
+                        description: "Only needed when several servers are configured: the <server> part of the constant names, or the server URL. Leave it out for a single server.",
+                    },
+                    auth: {
+                        type: "string",
+                        enum: [...AUTH_MODES],
+                        description: "Only needed when the constants for both token and basic auth exist. Otherwise the tool works it out from which constants exist.",
+                    },
+                    tokenHeaderName: {
+                        type: "string",
+                        description: "Header that carries the token, for example 'x-api-key'. Defaults to 'Authorization'.",
+                    },
+                    tokenPrefix: {
+                        type: "string",
+                        description: "Text before the token in the header. Defaults to 'Bearer' for the Authorization header and to no prefix for other headers.",
+                    },
+                },
+                additionalProperties: false,
+            },
+            inProgressMessage: "Connecting to the i3X server...",
+            run: asToolResult(input => connect(sp, input)),
+        },
         {
             name: "i3x_list_object_types",
             description:

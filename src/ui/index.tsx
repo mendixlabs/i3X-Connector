@@ -5,7 +5,7 @@ import { Loader, List, DetailPanel } from "./components/_components";
 import { createObjectsListMicroflow, initStudioPro, summarizeArtifactResult } from "./services/studioProService";
 import { ConnectionConfig, ObjectType, isObjectTypeArray } from "./types";
 import { IMPLEMENTATION_MODULE } from "./constants";
-import type { ConnectionMessage } from "../shared/messages";
+import { isConnectionMessage, type ConnectionMessage, type ConnectionRequestMessage } from "../shared/messages";
 import styles from "./index.module.css";
 
 export const component: IComponent = {
@@ -21,6 +21,23 @@ export const component: IComponent = {
             const [connection, setConnection] = useState<ConnectionConfig | null>(null);
             const [selectedItem, setSelectedItem] = useState<ObjectType | null>(null);
             const [isCreatingObjectsList, setIsCreatingObjectsList] = useState(false);
+            const [sharedConnection, setSharedConnection] = useState<ConnectionConfig | null>(null);
+
+            // Picks up connections made by the Maia i3x_connect tool: one made before the tab
+            // opened (through the request) and any made while it is open (through the handler).
+            useEffect(() => {
+                const messagePassing = studioPro.ui.messagePassing;
+                const handler = messagePassing.addMessageHandler<unknown>(async ({ message }) => {
+                    if (isConnectionMessage(message)) setSharedConnection(message.config);
+                });
+                const request: ConnectionRequestMessage = { type: "i3x.connectionRequest" };
+                messagePassing.sendMessage<ConnectionRequestMessage, ConnectionConfig>(request, async config => {
+                    setSharedConnection(config);
+                }).catch((error: unknown) => console.error("Could not ask for the Maia connection:", error));
+                return () => {
+                    handler.then(reference => messagePassing.removeMessageHandler(reference)).catch(() => undefined);
+                };
+            }, []);
 
             useEffect(() => {
                 const link = document.createElement("link");
@@ -123,7 +140,7 @@ export const component: IComponent = {
                         Enter an i3X API endpoint URL below and press <kbd className={styles.kbd}>Enter</kbd> or click <strong>Load</strong> to retrieve object types. Click any row to inspect its schema.
                     </p>
 
-                    <Loader context={componentContext} setApiData={handleDataLoaded} setConnection={handleConnected} />
+                    <Loader context={componentContext} setApiData={handleDataLoaded} setConnection={handleConnected} sharedConnection={sharedConnection} />
                     <List
                         apiData={apiData}
                         selectedId={selectedItem?.elementId ?? null}

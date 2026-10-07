@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getStudioProApi, type Constants } from '@mendix/extensions-api';
 import styles from '../index.module.css';
-import { LoaderProps } from '../types';
+import { AuthConfig, LoaderProps } from '../types';
 import { getObjectTypesUrl, unwrapI3xResult } from '../services/i3xUrl';
 import { buildI3xRequestHeaders } from '../services/auth';
 import { IMPLEMENTATION_MODULE, CONSTANT_API_BASE_URL, CONSTANT_API_USERNAME, CONSTANT_API_PASSWORD, CONSTANT_API_TOKEN } from '../constants';
 
-const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) => {
+const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection, sharedConnection }) => {
     const studioPro = getStudioProApi(context);
     const messageApi = studioPro.ui.messageBoxes;
     const [url, setUrl] = useState('https://api.i3x.dev/v1/');
@@ -19,6 +19,8 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
     const [customHeaderName, setCustomHeaderName] = useState('x-api-key');
     const [customPrefix, setCustomPrefix] = useState('');
     const [multiServerMode, setMultiServerMode] = useState(false);
+    // Set once a Maia connection fills the fields, so the slower constants preload can't overwrite them.
+    const sharedApplied = useRef(false);
 
     useEffect(() => {
         const preloadFromConstants = async () => {
@@ -33,7 +35,7 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
                 const baseUrlConstant = await studioPro.app.model.constants.load<Constants.Constant>(
                     'Constants$Constant', baseUrlUnit.$ID
                 );
-                if (!baseUrlConstant?.defaultValue) return;
+                if (!baseUrlConstant?.defaultValue || sharedApplied.current) return;
 
                 setUrl(baseUrlConstant.defaultValue);
 
@@ -103,8 +105,10 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
             return;
         }
 
-        const auth = resolveAuth();
+        await loadObjectTypes(url, resolveAuth(), multiServerMode);
+    };
 
+    const loadObjectTypes = async (url: string, auth: AuthConfig, multiServerMode: boolean) => {
         const objectTypesUrl = getObjectTypesUrl(url);
         if (!objectTypesUrl) {
             await messageApi.show('error', `Invalid URL: "${url}". Please enter a valid i3X endpoint.`);
@@ -134,6 +138,28 @@ const Loader: React.FC<LoaderProps> = ({ context, setApiData, setConnection }) =
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        if (!sharedConnection) return;
+        sharedApplied.current = true;
+        const { apiBaseUrl, auth } = sharedConnection;
+        setUrl(apiBaseUrl);
+        setMultiServerMode(sharedConnection.multiServerMode);
+        setAuthMode(auth.mode);
+        if (auth.mode === 'basic') {
+            setUsername(auth.username);
+            setPassword(auth.password);
+        } else if (auth.mode === 'token') {
+            setToken(auth.token);
+            const isBearer = auth.headerName.toLowerCase() === 'authorization' && auth.prefix === 'Bearer';
+            setTokenHeaderMode(isBearer ? 'bearer' : 'custom');
+            if (!isBearer) {
+                setCustomHeaderName(auth.headerName);
+                setCustomPrefix(auth.prefix);
+            }
+        }
+        loadObjectTypes(apiBaseUrl, auth, sharedConnection.multiServerMode);
+    }, [sharedConnection]);
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === 'Enter') handleLoad();
